@@ -83,7 +83,7 @@ jobs:
               exit 1
             fi
             mkdir -p .secrets
-            printf '%s' "$APK_KEYSTORE_B64" | base64 -d > .secrets/mistu-release.jks
+            printf '%s' "$APK_KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > .secrets/mistu-release.jks
             echo "KEYSTORE_FILE=.secrets/mistu-release.jks" >> "$GITHUB_ENV"
           fi
 
