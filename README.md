@@ -125,18 +125,6 @@ You can pass extra Morphe CLI patch arguments after `--`:
 node scripts/morphe.mjs build --target youtube -- --disable "Custom branding"
 ```
 
-## Scheduled Builds
-
-`.github/workflows/watch-morphe-patches.yml` runs every 6 hours and checks the latest release from `MorpheApp/morphe-patches`.
-
-When a new Morphe patch release appears, it dispatches the build workflow with:
-
-- `patches_version` set to the new Morphe patch tag
-- `apk_version_source` set to `recommended`
-- release creation enabled
-
-After the build workflow creates the Release, it stores the handled Morphe patch release in the repository variable `LAST_MORPHE_PATCHES_RELEASE`. If the build fails, the watcher will try again on a later schedule.
-
 ## Compatibility Note
 
 Morphe patches only support the versions listed by the patch bundle. On 2026-04-28 APKPure latest was newer than Morphe's listed compatible versions, and APKPure's apkeep-visible archive did not expose every current Morphe top recommendation. If an exact recommended APK is unavailable through apkeep/APKPure, provide a direct URL for that exact APK version or switch `APK_VERSION_SOURCE=latest` deliberately.
