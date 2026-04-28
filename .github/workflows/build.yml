@@ -1,0 +1,77 @@
+name: Build patched APKs
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "Comma-separated targets: youtube,youtube-music"
+        required: true
+        default: "youtube,youtube-music"
+      cli_version:
+        description: "Morphe CLI tag, or latest"
+        required: true
+        default: "latest"
+      patches_version:
+        description: "Morphe patches tag, or latest"
+        required: true
+        default: "latest"
+      upload_artifact:
+        description: "Upload patched APKs as a short-lived workflow artifact"
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Restore optional signing keystore
+        env:
+          APK_KEYSTORE_B64: ${{ secrets.APK_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$APK_KEYSTORE_B64" ]; then
+            mkdir -p .secrets
+            printf '%s' "$APK_KEYSTORE_B64" | base64 -d > .secrets/signing.keystore
+            echo "KEYSTORE_FILE=.secrets/signing.keystore" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build patched APKs
+        env:
+          BUILD_TARGETS: ${{ inputs.targets }}
+          MORPHE_CLI_VERSION: ${{ inputs.cli_version }}
+          MORPHE_PATCHES_VERSION: ${{ inputs.patches_version }}
+          YOUTUBE_APK_URL: ${{ secrets.YOUTUBE_APK_URL }}
+          YOUTUBE_MUSIC_APK_URL: ${{ secrets.YOUTUBE_MUSIC_APK_URL }}
+          KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
+          KEYSTORE_ALIAS: ${{ secrets.APK_KEYSTORE_ALIAS }}
+          KEYSTORE_ENTRY_PASSWORD: ${{ secrets.APK_KEYSTORE_ENTRY_PASSWORD }}
+        run: node scripts/morphe.mjs build
+
+      - name: Upload patched APKs
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-apks
+          path: |
+            output/*.apk
+            output/*-result.json
+          if-no-files-found: error
+          retention-days: 1

@@ -1,0 +1,26 @@
+.cache/
+.secrets/
+node_modules/
+
+# User-provided proprietary APKs and generated outputs.
+input/*
+!input/README.md
+output/*
+!output/README.md
+
+# Signing material must stay private.
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+
+# Local environment/secrets.
+.env
+.env.*
+!.env.example
+
+# OS/editor noise.
+.DS_Store
+Thumbs.db
+*.log
