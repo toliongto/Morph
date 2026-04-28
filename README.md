@@ -44,9 +44,9 @@ The downloader uses [EFF apkeep](https://github.com/EFForg/apkeep) with APKPure 
 
 The YouTube Music URL is normalized to `com.google.android.apps.youtube.music`, which is the package used by the current YouTube Music app and Morphe's patch metadata.
 
-The script asks apkeep for APKPure's available versions and downloads the exact top recommended version from the selected Morphe patch release. It does not fall back to a nearby compatible version.
+The script first asks apkeep to download the exact top recommended version from the selected Morphe patch release.
 
-If that exact APKPure version is not available through apkeep, the build fails clearly instead of substituting another version. Provide a direct URL for the exact APK version:
+If that exact APKPure version is not available through apkeep, the build falls back to APKPure latest and automatically adds Morphe's `--force` flag for that target. You can still provide a direct URL for the exact APK version:
 
 - `YOUTUBE_APK_URL`
 - `YOUTUBE_MUSIC_APK_URL`
@@ -127,7 +127,7 @@ node scripts/morphe.mjs build --target youtube -- --disable "Custom branding"
 
 ## Compatibility Note
 
-Morphe patches only support the versions listed by the patch bundle. On 2026-04-28 APKPure latest was newer than Morphe's listed compatible versions, and APKPure's apkeep-visible archive did not expose every current Morphe top recommendation. If an exact recommended APK is unavailable through apkeep/APKPure, provide a direct URL for that exact APK version or switch `APK_VERSION_SOURCE=latest` deliberately.
+Morphe patches only support the versions listed by the patch bundle. On 2026-04-28 APKPure latest was newer than Morphe's listed compatible versions, and APKPure's apkeep-visible archive did not expose every current Morphe top recommendation. If an exact recommended APK is unavailable through apkeep/APKPure, the script falls back to APKPure latest and patches with `--force`; provide a direct URL if you want the exact recommended APK instead.
 
 If patching fails due to version compatibility after you intentionally use a different APK version, provide a compatible APK manually or pass Morphe's `--force` after `--`:
 

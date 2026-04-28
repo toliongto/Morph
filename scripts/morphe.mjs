@@ -123,6 +123,7 @@ async function build() {
 
   for (const app of selectedApps()) {
     await ensureInput(app);
+    const patchArgs = patchArgsFor(app);
 
     const args = [
       "-jar",
@@ -146,7 +147,7 @@ async function build() {
       if (truthy(env("MORPHE_OPTIONS_UPDATE"))) args.push("--options-update");
     }
 
-    args.push(...passthroughArgs, app.input);
+    args.push(...patchArgs, app.input);
 
     console.log(`\n==> Building ${app.label}`);
     run("java", args);
@@ -367,10 +368,12 @@ async function printReleaseNotes() {
     if (apkMeta?.filename) lines.push(`- Source APK: ${apkMeta.filename}${apkMeta.size ? ` (${apkMeta.size})` : ""}`);
     if (apkMeta?.source) lines.push(`- APK source: ${apkMeta.source}`);
     if (apkMeta?.desiredVersion) lines.push(`- Requested APK version: ${apkMeta.desiredVersion}`);
+    if (apkMeta?.fallbackFromVersion) lines.push(`- Fallback: exact ${apkMeta.fallbackFromVersion} was unavailable; used APKPure latest with --force`);
     if (apkMeta?.morpheTopRecommendedVersion) lines.push(`- Morphe top recommended APK version: ${apkMeta.morpheTopRecommendedVersion}`);
     if (Array.isArray(apkMeta?.availableCompatibleVersions)) {
       lines.push(`- APKPure-compatible recommended versions found: ${apkMeta.availableCompatibleVersions.join(", ") || "none"}`);
     }
+    if (apkMeta?.forcePatchRequired) lines.push("- Patch args added for this target: --force");
     lines.push(`- Build result: ${buildResult}`);
     lines.push(`- Successful patches (${applied.length}): ${applied.length ? applied.join(", ") : "none"}`);
     lines.push(`- Failed patches (${failed.length}): ${failed.length ? failed.map(formatFailedPatch).join("; ") : "none"}`);
@@ -405,7 +408,10 @@ function selectedApps() {
 
 async function ensureInput(app) {
   const apkpureMode = (env("APK_SOURCE") || "apkpure").toLowerCase();
-  if (existsSync(app.input) && !(apkpureMode === "apkpure" && truthy(env("AUTO_UPDATE_APKS")))) return;
+  if (existsSync(app.input) && !(apkpureMode === "apkpure" && truthy(env("AUTO_UPDATE_APKS")))) {
+    await applyCachedInputMetadata(app);
+    return;
+  }
 
   if (app.url) {
     mkdirSync(dirname(app.input), { recursive: true });
@@ -424,6 +430,24 @@ async function ensureInput(app) {
   );
 }
 
+async function applyCachedInputMetadata(app) {
+  const metadata = await readJson(fromRoot(".cache/apkpure", `${app.id}.json`));
+  if (!metadata?.forcePatchRequired) return;
+  if (metadata.destination && resolve(metadata.destination) !== resolve(app.input)) return;
+
+  app.forcePatch = true;
+  console.log(`${app.label}: cached APK metadata requires --force for patching.`);
+}
+
+function patchArgsFor(app) {
+  const args = [...passthroughArgs];
+  if (app.forcePatch && !args.includes("--force")) {
+    console.log(`${app.label}: adding --force because APKPure latest fallback is being used.`);
+    args.push("--force");
+  }
+  return args;
+}
+
 async function downloadApkpureApp(app, { force = false, patchesList = null } = {}) {
   mkdirSync(paths.apkpure, { recursive: true });
   mkdirSync(dirname(app.input), { recursive: true });
@@ -434,9 +458,32 @@ async function downloadApkpureApp(app, { force = false, patchesList = null } = {
   const existing = await readJson(metadataFile);
 
   if (desiredVersion) {
-    return downloadWithApkeep(app, { desiredVersion, force, patchesList, metadataFile, existing });
+    try {
+      return await downloadWithApkeep(app, { desiredVersion, force, patchesList, metadataFile, existing });
+    } catch (error) {
+      if (!shouldFallbackToLatest(app)) throw error;
+
+      console.warn(`${app.label}: exact APK ${desiredVersion} could not be downloaded: ${error.message}`);
+      console.warn(`${app.label}: falling back to APKPure latest and enabling --force for patching.`);
+      app.forcePatch = true;
+      return downloadApkpureLatestApp(app, {
+        force: true,
+        metadataFile,
+        existing,
+        desiredVersion,
+        fallbackReason: error.message,
+      });
+    }
   }
 
+  return downloadApkpureLatestApp(app, { force, metadataFile, existing, desiredVersion });
+}
+
+function shouldFallbackToLatest(app) {
+  return !app.requestedVersion && (env("APK_VERSION_SOURCE") || "recommended").toLowerCase() === "recommended";
+}
+
+async function downloadApkpureLatestApp(app, { force = false, metadataFile, existing, desiredVersion = "", fallbackReason = "" }) {
   const selected = await inspectApkpureLatest(app);
   const selectedUrl = apkpureDownloadUrl(app);
 
@@ -471,6 +518,9 @@ async function downloadApkpureApp(app, { force = false, patchesList = null } = {
     destination: app.input,
     version: selected.version,
     desiredVersion,
+    fallbackFromVersion: fallbackReason ? desiredVersion : "",
+    fallbackReason,
+    forcePatchRequired: Boolean(fallbackReason),
     size: selected.size,
     filename: selected.filename,
     downloadedAt: new Date().toISOString(),
