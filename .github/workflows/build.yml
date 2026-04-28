@@ -74,11 +74,17 @@ jobs:
       - name: Restore optional signing keystore
         env:
           APK_KEYSTORE_B64: ${{ secrets.APK_KEYSTORE_B64 }}
+          APK_KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
+          APK_KEYSTORE_ENTRY_PASSWORD: ${{ secrets.APK_KEYSTORE_ENTRY_PASSWORD }}
         run: |
           if [ -n "$APK_KEYSTORE_B64" ]; then
+            if [ -z "$APK_KEYSTORE_PASSWORD" ] || [ -z "$APK_KEYSTORE_ENTRY_PASSWORD" ]; then
+              echo "::error::APK_KEYSTORE_B64 is set, but APK_KEYSTORE_PASSWORD or APK_KEYSTORE_ENTRY_PASSWORD is missing."
+              exit 1
+            fi
             mkdir -p .secrets
-            printf '%s' "$APK_KEYSTORE_B64" | base64 -d > .secrets/signing.keystore
-            echo "KEYSTORE_FILE=.secrets/signing.keystore" >> "$GITHUB_ENV"
+            printf '%s' "$APK_KEYSTORE_B64" | base64 -d > .secrets/mistu-release.jks
+            echo "KEYSTORE_FILE=.secrets/mistu-release.jks" >> "$GITHUB_ENV"
           fi
 
       - name: Configure Morphe patch flags
@@ -103,8 +109,9 @@ jobs:
           YOUTUBE_APK_URL: ${{ secrets.YOUTUBE_APK_URL }}
           YOUTUBE_MUSIC_APK_URL: ${{ secrets.YOUTUBE_MUSIC_APK_URL }}
           KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
-          KEYSTORE_ALIAS: ${{ secrets.APK_KEYSTORE_ALIAS }}
+          KEYSTORE_ALIAS: ${{ secrets.APK_KEYSTORE_ALIAS || 'mistu' }}
           KEYSTORE_ENTRY_PASSWORD: ${{ secrets.APK_KEYSTORE_ENTRY_PASSWORD }}
+          SIGNER_NAME: Mistu
         run: node scripts/morphe.mjs build
 
       - name: Prepare release metadata

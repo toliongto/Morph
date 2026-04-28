@@ -23,6 +23,8 @@ const paths = {
   input: fromRoot("input"),
   output: fromRoot("output"),
 };
+const packageNamePatch = "Change package name";
+const packageNamePattern = /^[a-z]\w*(\.[a-z]\w*)+$/;
 
 const appConfigs = {
   youtube: {
@@ -32,6 +34,7 @@ const appConfigs = {
     packageName: "com.google.android.youtube",
     apkpureSlug: "youtube-2025",
     apkpurePage: "https://apkpure.com/youtube-2025/com.google.android.youtube",
+    patchedPackageName: env("YOUTUBE_PATCHED_PACKAGE_NAME") || "com.mistu.android.youtube",
     requestedVersion: env("YOUTUBE_APK_VERSION"),
     input: envPath("YOUTUBE_APK", "input/youtube.apk"),
     url: env("YOUTUBE_APK_URL"),
@@ -46,6 +49,7 @@ const appConfigs = {
     packageName: "com.google.android.apps.youtube.music",
     apkpureSlug: "youtube-music",
     apkpurePage: "https://apkpure.com/youtube-music/com.google.android.apps.youtube.music",
+    patchedPackageName: env("YOUTUBE_MUSIC_PATCHED_PACKAGE_NAME") || "com.mistu.android.youtube.music",
     requestedVersion: env("YOUTUBE_MUSIC_APK_VERSION"),
     input: envPath("YOUTUBE_MUSIC_APK", "input/youtube-music.apk"),
     url: env("YOUTUBE_MUSIC_APK_URL"),
@@ -125,6 +129,7 @@ async function build() {
 
   for (const app of selectedApps()) {
     await ensureInput(app);
+    await ensurePackageNameOptions(app);
     const patchArgs = patchArgsFor(app);
 
     const args = [
@@ -181,6 +186,7 @@ async function createOptions() {
       "--filter-package-name",
       app.packageName,
     ]);
+    await ensurePackageNameOptions(app);
   }
 }
 
@@ -354,7 +360,8 @@ async function printReleaseNotes() {
     const result = await readJson(app.result);
     const apkMeta = await readJson(fromRoot(".cache/apkpure", `${app.id}.json`));
     const apkVersion = result?.packageVersion || apkMeta?.version || "unknown";
-    const packageName = result?.packageName || app.packageName;
+    const sourcePackageName = result?.packageName || app.packageName;
+    const packageName = app.patchedPackageName || sourcePackageName;
     const applied = patchesFrom(result?.appliedPatches);
     const failed = failedPatchesFrom(result?.failedPatches);
     const stepFailures = stepFailuresFrom(result?.patchingSteps);
@@ -366,6 +373,7 @@ async function printReleaseNotes() {
     lines.push("");
     lines.push(`- APK version: ${apkVersion}`);
     lines.push(`- Package: ${packageName}`);
+    if (sourcePackageName !== packageName) lines.push(`- Source package: ${sourcePackageName}`);
     if (apkMeta?.filename) lines.push(`- Source APK: ${apkMeta.filename}${apkMeta.size ? ` (${apkMeta.size})` : ""}`);
     if (apkMeta?.source) lines.push(`- APK source: ${apkMeta.source}`);
     if (apkMeta?.desiredVersion) lines.push(`- Requested APK version: ${apkMeta.desiredVersion}`);
@@ -447,6 +455,83 @@ function patchArgsFor(app) {
     args.push("--force");
   }
   return args;
+}
+
+async function ensurePackageNameOptions(app) {
+  if (!app.patchedPackageName) return;
+  if (!packageNamePattern.test(app.patchedPackageName)) {
+    throw new Error(`${app.label}: invalid patched package name "${app.patchedPackageName}".`);
+  }
+
+  const patchesList = await fetchPatchesList();
+  const existingBundles = await readJson(app.options);
+  const existingBundle = Array.isArray(existingBundles) ? existingBundles[0] : null;
+  const patchEntries = {};
+
+  for (const patch of patchesList?.patches || []) {
+    if (!patch?.name || !patchCompatibleWithApp(patch, app)) continue;
+
+    const existingEntry = findPatchEntry(existingBundle, patch.name);
+    patchEntries[patch.name] = {
+      enabled: existingEntry?.enabled ?? Boolean(patch.use),
+      options: mergePatchOptions(patch, existingEntry),
+    };
+  }
+
+  const packageNameEntry = patchEntries[packageNamePatch];
+  if (!packageNameEntry) {
+    throw new Error(`Morphe patches ${patchesList?.version || ""} did not include "${packageNamePatch}".`);
+  }
+
+  packageNameEntry.enabled = true;
+  packageNameEntry.options = {
+    ...packageNameEntry.options,
+    packageName: app.patchedPackageName,
+    updatePermissions: true,
+    updateProviders: true,
+    updateProvidersStrings: true,
+  };
+
+  const now = new Date().toISOString();
+  await writeJson(app.options, [{
+    meta: {
+      created_at: existingBundle?.meta?.created_at || now,
+      updated_at: now,
+      source: `morphe-patches ${patchesList?.version || env("MORPHE_PATCHES_VERSION") || "latest"}`,
+    },
+    patches: patchEntries,
+  }]);
+
+  console.log(`${app.label}: package rename option set to ${app.patchedPackageName}`);
+}
+
+function patchCompatibleWithApp(patch, app) {
+  if (!patch.compatiblePackages) return true;
+  return Object.prototype.hasOwnProperty.call(patch.compatiblePackages, app.packageName);
+}
+
+function findPatchEntry(bundle, patchName) {
+  if (!bundle?.patches) return null;
+
+  const match = Object.entries(bundle.patches)
+    .find(([name]) => name.toLowerCase() === patchName.toLowerCase());
+  return match?.[1] || null;
+}
+
+function mergePatchOptions(patch, existingEntry) {
+  const defaults = {};
+
+  for (const option of patch.options || []) {
+    if (!option?.key) continue;
+    defaults[option.key] = Object.prototype.hasOwnProperty.call(option, "default")
+      ? option.default
+      : null;
+  }
+
+  return {
+    ...defaults,
+    ...(existingEntry?.options || {}),
+  };
 }
 
 async function downloadApkpureApp(app, { force = false, patchesList = null } = {}) {
@@ -868,6 +953,10 @@ Environment:
   APK_VERSION_SOURCE         recommended, latest, or an explicit version. Defaults to recommended.
   YOUTUBE_APK_VERSION        Explicit YouTube APK versionName override.
   YOUTUBE_MUSIC_APK_VERSION  Explicit YouTube Music APK versionName override.
+  YOUTUBE_PATCHED_PACKAGE_NAME
+                              Defaults to com.mistu.android.youtube.
+  YOUTUBE_MUSIC_PATCHED_PACKAGE_NAME
+                              Defaults to com.mistu.android.youtube.music.
   AUTO_UPDATE_APKS           Set to 1 to refresh existing APKPure downloads during build.
   PYTHON_BIN                 Python executable for the APKPure downloader. Defaults to python.
   KEYSTORE_FILE              Optional signing keystore path.
