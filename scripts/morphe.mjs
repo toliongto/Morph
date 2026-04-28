@@ -595,17 +595,58 @@ async function downloadApkpureLatestApp(app, { force = false, metadataFile, exis
     return;
   }
 
-  return downloadWithPythonApkpure(app, {
-    selectedVersion: "",
-    force: true,
-    patchesList: null,
+  return downloadApkpureDirectLatestApp(app, {
+    selected,
     metadataFile,
-    existing,
     desiredVersion,
     fallbackFromVersion: fallbackReason ? desiredVersion : "",
     fallbackReason,
     forcePatchRequired: Boolean(fallbackReason),
-    expectedVersion: selected.version,
+  });
+}
+
+async function downloadApkpureDirectLatestApp(
+  app,
+  {
+    selected,
+    metadataFile,
+    desiredVersion = "",
+    fallbackFromVersion = "",
+    fallbackReason = "",
+    forcePatchRequired = false,
+  },
+) {
+  const extension = extname(selected.filename || "").toLowerCase() || ".apk";
+  const destination = replaceExtension(app.input, extension);
+  const directUrl = apkpureDownloadUrl(app);
+
+  console.log(`Downloading APKPure ${app.label} latest with direct APKPure endpoint`);
+  rmSync(destination, { force: true });
+  await downloadFile(directUrl, destination, apkpureHeaders());
+  app.input = destination;
+
+  const list = await fetchPatchesList();
+  const topRecommendedVersion = recommendedVersionFor(app, list);
+  const compatible = compatibleVersionsFor(app, list);
+
+  await writeJson(metadataFile, {
+    app: app.id,
+    packageName: app.packageName,
+    sourcePage: app.apkpurePage,
+    source: "apkpure-direct",
+    directUrl,
+    destination,
+    version: selected.version,
+    fileType: extension.replace(/^\./, "").toUpperCase(),
+    desiredVersion,
+    fallbackFromVersion,
+    fallbackReason,
+    forcePatchRequired,
+    morpheTopRecommendedVersion: topRecommendedVersion,
+    availableCompatibleVersions: [],
+    filename: selected.filename || basename(destination),
+    size: selected.size,
+    downloadedAt: new Date().toISOString(),
   });
 }
 
