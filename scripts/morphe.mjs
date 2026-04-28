@@ -21,6 +21,7 @@ let patchesListPromise = null;
 const paths = {
   tools: fromRoot(".cache/tools"),
   tmp: fromRoot(".cache/tmp"),
+  apks: fromRoot(".cache/apks"),
   apkpure: fromRoot(".cache/apkpure"),
   input: fromRoot("input"),
   output: fromRoot("output"),
@@ -36,6 +37,11 @@ const appConfigs = {
     packageName: "com.google.android.youtube",
     apkpureSlug: "youtube-2025",
     apkpurePage: "https://apkpure.com/youtube-2025/com.google.android.youtube",
+    apkmirrorOrg: "google-inc",
+    apkmirrorRepo: "youtube",
+    apkmirrorArch: env("YOUTUBE_APKMIRROR_ARCH") || env("APKMIRROR_ARCH") || "universal",
+    apkmirrorFallbackArch: env("YOUTUBE_APKMIRROR_FALLBACK_ARCH") || env("APKMIRROR_FALLBACK_ARCH") || "arm64-v8a",
+    apkmirrorDpi: env("YOUTUBE_APKMIRROR_DPI") || env("APKMIRROR_DPI") || "nodpi",
     patchedPackageName: env("YOUTUBE_PATCHED_PACKAGE_NAME") || "com.mistu.android.youtube",
     requestedVersion: env("YOUTUBE_APK_VERSION"),
     input: envPath("YOUTUBE_APK", "input/youtube.apk"),
@@ -51,6 +57,11 @@ const appConfigs = {
     packageName: "com.google.android.apps.youtube.music",
     apkpureSlug: "youtube-music",
     apkpurePage: "https://apkpure.com/youtube-music/com.google.android.apps.youtube.music",
+    apkmirrorOrg: "google-inc",
+    apkmirrorRepo: "youtube-music",
+    apkmirrorArch: env("YOUTUBE_MUSIC_APKMIRROR_ARCH") || env("APKMIRROR_ARCH") || "arm64-v8a",
+    apkmirrorFallbackArch: env("YOUTUBE_MUSIC_APKMIRROR_FALLBACK_ARCH") || env("APKMIRROR_FALLBACK_ARCH") || "armeabi-v7a",
+    apkmirrorDpi: env("YOUTUBE_MUSIC_APKMIRROR_DPI") || env("APKMIRROR_DPI") || "nodpi",
     patchedPackageName: env("YOUTUBE_MUSIC_PATCHED_PACKAGE_NAME") || "com.mistu.android.youtube.music",
     requestedVersion: env("YOUTUBE_MUSIC_APK_VERSION"),
     input: envPath("YOUTUBE_MUSIC_APK", "input/youtube-music.apk"),
@@ -166,7 +177,7 @@ async function build() {
 async function downloadApks({ force = false } = {}) {
   const patchesList = await fetchPatchesList();
   for (const app of selectedApps()) {
-    await downloadApkpureApp(app, { force, patchesList });
+    await downloadApkApp(app, { force, patchesList });
   }
 }
 
@@ -366,7 +377,7 @@ async function printReleaseNotes() {
 
   for (const app of apps) {
     const result = await readJson(app.result);
-    const apkMeta = await readJson(fromRoot(".cache/apkpure", `${app.id}.json`));
+    const apkMeta = await readApkMetadata(app);
     const apkVersion = result?.packageVersion || apkMeta?.version || "unknown";
     const sourcePackageName = result?.packageName || app.packageName;
     const packageName = app.patchedPackageName || sourcePackageName;
@@ -385,10 +396,10 @@ async function printReleaseNotes() {
     if (apkMeta?.filename) lines.push(`- Source APK: ${apkMeta.filename}${apkMeta.size ? ` (${apkMeta.size})` : ""}`);
     if (apkMeta?.source) lines.push(`- APK source: ${apkMeta.source}`);
     if (apkMeta?.desiredVersion) lines.push(`- Requested APK version: ${apkMeta.desiredVersion}`);
-    if (apkMeta?.fallbackFromVersion) lines.push(`- Fallback: exact ${apkMeta.fallbackFromVersion} was unavailable; used APKPure latest with --force`);
+    if (apkMeta?.fallbackFromVersion) lines.push(`- Fallback: exact ${apkMeta.fallbackFromVersion} was unavailable; used ${apkSourceLabel(apkMeta.source)} latest with --force`);
     if (apkMeta?.morpheTopRecommendedVersion) lines.push(`- Morphe top recommended APK version: ${apkMeta.morpheTopRecommendedVersion}`);
     if (Array.isArray(apkMeta?.availableCompatibleVersions)) {
-      lines.push(`- APKPure-compatible recommended versions found: ${apkMeta.availableCompatibleVersions.join(", ") || "none"}`);
+      lines.push(`- Source-compatible recommended versions found: ${apkMeta.availableCompatibleVersions.join(", ") || "none"}`);
     }
     if (apkMeta?.forcePatchRequired) lines.push("- Patch args added for this target: --force");
     lines.push(`- Build result: ${buildResult}`);
@@ -423,9 +434,42 @@ function selectedApps() {
   return uniqueTargets.map((target) => appConfigs[target]);
 }
 
+function apkSources() {
+  const raw = env("APK_SOURCE") || "apkpure";
+  const expanded = raw.toLowerCase() === "auto" ? "apkmirror,apkpure" : raw;
+  const sources = expanded
+    .split(/[,\s]+/)
+    .map((source) => source.trim().toLowerCase())
+    .filter(Boolean);
+  const uniqueSources = [...new Set(sources.length ? sources : ["apkpure"])];
+  const supported = new Set(["apkmirror", "apkpure", "local"]);
+  const unknown = uniqueSources.filter((source) => !supported.has(source));
+
+  if (unknown.length) {
+    throw new Error(`Unsupported APK_SOURCE value(s): ${unknown.join(", ")}. Use apkmirror, apkpure, local, or auto.`);
+  }
+
+  return uniqueSources;
+}
+
+function apkSourceLabel(source) {
+  const labels = {
+    apkmirror: "APKMirror",
+    apkpure: "APKPure",
+    "apkpure-direct": "APKPure",
+    "apkpure-python": "APKPure",
+    apkeep: "APKPure/apkeep",
+    local: "local input",
+  };
+  return labels[source] || source || "configured source";
+}
+
 async function ensureInput(app) {
-  const apkpureMode = (env("APK_SOURCE") || "apkpure").toLowerCase();
-  if (existsSync(app.input) && !(apkpureMode === "apkpure" && truthy(env("AUTO_UPDATE_APKS")))) {
+  const sources = apkSources();
+  const canAutoDownload = sources.some((source) => source !== "local");
+  const refreshInput = canAutoDownload && truthy(env("AUTO_UPDATE_APKS"));
+
+  if (existsSync(app.input) && !refreshInput) {
     await applyCachedInputMetadata(app);
     return;
   }
@@ -437,18 +481,18 @@ async function ensureInput(app) {
     return;
   }
 
-  if (apkpureMode === "apkpure") {
-    await downloadApkpureApp(app, { force: truthy(env("AUTO_UPDATE_APKS")) });
+  if (canAutoDownload) {
+    await downloadApkApp(app, { force: refreshInput });
     return;
   }
 
   throw new Error(
-    `${app.label} input is missing. Put it at ${relative(app.input)}, set ${envNameFor(app.id)}_URL, or set APK_SOURCE=apkpure.`,
+    `${app.label} input is missing. Put it at ${relative(app.input)}, set ${envNameFor(app.id)}_URL, or set APK_SOURCE=apkmirror,apkpure.`,
   );
 }
 
 async function applyCachedInputMetadata(app) {
-  const metadata = await readJson(fromRoot(".cache/apkpure", `${app.id}.json`));
+  const metadata = await readApkMetadata(app);
   if (!metadata?.forcePatchRequired) return;
   if (metadata.destination && resolve(metadata.destination) !== resolve(app.input)) return;
 
@@ -542,46 +586,107 @@ function mergePatchOptions(patch, existingEntry) {
   };
 }
 
-async function downloadApkpureApp(app, { force = false, patchesList = null } = {}) {
-  mkdirSync(paths.apkpure, { recursive: true });
+async function downloadApkApp(app, { force = false, patchesList = null } = {}) {
+  const sources = apkSources().filter((source) => source !== "local");
+  if (!sources.length) {
+    throw new Error(`${app.label}: APK_SOURCE does not include a downloadable source.`);
+  }
+
+  mkdirSync(paths.apks, { recursive: true });
   mkdirSync(dirname(app.input), { recursive: true });
 
   const desiredVersion = await desiredApkVersion(app, patchesList);
-
-  const metadataFile = fromRoot(".cache/apkpure", `${app.id}.json`);
-  const existing = await readJson(metadataFile);
+  const metadataFile = metadataFileFor(app);
+  const existing = await readApkMetadata(app);
 
   if (desiredVersion) {
-    try {
-      return await downloadWithPythonApkpure(app, {
-        selectedVersion: desiredVersion,
-        force,
-        patchesList,
-        metadataFile,
-        existing,
-        desiredVersion,
-      });
-    } catch (error) {
-      if (!shouldFallbackToLatest(app)) throw error;
-
-      console.warn(`${app.label}: exact APK ${desiredVersion} could not be downloaded: ${error.message}`);
-      console.warn(`${app.label}: falling back to APKPure latest and enabling --force for patching.`);
-      app.forcePatch = true;
-      return downloadApkpureLatestApp(app, {
-        force: true,
-        metadataFile,
-        existing,
-        desiredVersion,
-        fallbackReason: error.message,
-      });
+    const exactErrors = [];
+    for (const source of sources) {
+      try {
+        return await downloadExactApkFromSource(source, app, {
+          selectedVersion: desiredVersion,
+          force,
+          patchesList,
+          metadataFile,
+          existing,
+          desiredVersion,
+        });
+      } catch (error) {
+        exactErrors.push(`${apkSourceLabel(source)}: ${error.message}`);
+      }
     }
+
+    if (!shouldFallbackToLatest(app)) {
+      throw new Error(`${app.label}: exact APK ${desiredVersion} could not be downloaded. ${exactErrors.join(" | ")}`);
+    }
+
+    const fallbackReason = exactErrors.join(" | ");
+    console.warn(`${app.label}: exact APK ${desiredVersion} could not be downloaded from configured sources: ${fallbackReason}`);
+    console.warn(`${app.label}: falling back to the latest available APK and enabling --force for patching.`);
+    app.forcePatch = true;
+    return downloadLatestApkFromSources(app, {
+      sources,
+      force: true,
+      patchesList,
+      metadataFile,
+      existing,
+      desiredVersion,
+      fallbackReason,
+    });
   }
 
-  return downloadApkpureLatestApp(app, { force, metadataFile, existing, desiredVersion });
+  return downloadLatestApkFromSources(app, { sources, force, patchesList, metadataFile, existing, desiredVersion });
 }
 
 function shouldFallbackToLatest(app) {
   return !app.requestedVersion && (env("APK_VERSION_SOURCE") || "recommended").toLowerCase() === "recommended";
+}
+
+async function downloadExactApkFromSource(source, app, options) {
+  if (source === "apkmirror") return downloadWithPythonApkmirror(app, options);
+  if (source === "apkpure") return downloadWithPythonApkpure(app, options);
+  throw new Error(`Unsupported APK source "${source}"`);
+}
+
+async function downloadLatestApkFromSources(
+  app,
+  { sources, force = false, patchesList = null, metadataFile, existing, desiredVersion = "", fallbackReason = "" },
+) {
+  const latestErrors = [];
+
+  for (const source of sources) {
+    try {
+      if (source === "apkmirror") {
+        return await downloadWithPythonApkmirror(app, {
+          selectedVersion: "",
+          force,
+          patchesList,
+          metadataFile,
+          existing,
+          desiredVersion,
+          fallbackFromVersion: fallbackReason ? desiredVersion : "",
+          fallbackReason,
+          forcePatchRequired: Boolean(fallbackReason),
+        });
+      }
+
+      if (source === "apkpure") {
+        return await downloadApkpureLatestApp(app, {
+          force,
+          metadataFile,
+          existing,
+          desiredVersion,
+          fallbackReason,
+        });
+      }
+
+      throw new Error(`Unsupported APK source "${source}"`);
+    } catch (error) {
+      latestErrors.push(`${apkSourceLabel(source)}: ${error.message}`);
+    }
+  }
+
+  throw new Error(`${app.label}: latest APK could not be downloaded from configured sources. ${latestErrors.join(" | ")}`);
 }
 
 async function downloadApkpureLatestApp(app, { force = false, metadataFile, existing, desiredVersion = "", fallbackReason = "" }) {
@@ -590,6 +695,7 @@ async function downloadApkpureLatestApp(app, { force = false, metadataFile, exis
   if (
     !force &&
     existsSync(app.input) &&
+    String(existing?.source || "").startsWith("apkpure") &&
     selected.version &&
     existing?.version === selected.version &&
     existing?.destination === app.input
@@ -654,6 +760,110 @@ async function downloadApkpureDirectLatestApp(
     availableCompatibleVersions: [],
     filename: selected.filename || basename(destination),
     size: selected.size,
+    downloadedAt: new Date().toISOString(),
+  });
+}
+
+async function downloadWithPythonApkmirror(
+  app,
+  {
+    selectedVersion = "",
+    force = false,
+    patchesList = null,
+    metadataFile,
+    existing,
+    desiredVersion = "",
+    fallbackFromVersion = "",
+    fallbackReason = "",
+    forcePatchRequired = false,
+  },
+) {
+  const requestedLabel = selectedVersion || "latest";
+
+  if (
+    !force &&
+    existing?.source === "apkmirror" &&
+    existing?.destination &&
+    existsSync(existing.destination) &&
+    (selectedVersion ? existing?.version === selectedVersion : true)
+  ) {
+    app.input = existing.destination;
+    console.log(`${app.label} ${existing.version || requestedLabel} already downloaded from APKMirror at ${relative(app.input)}`);
+    return;
+  }
+
+  const outputDir = fromRoot(".cache/apkmirror", app.id);
+  rmSync(outputDir, { recursive: true, force: true });
+  mkdirSync(outputDir, { recursive: true });
+
+  console.log(`Downloading APKMirror ${app.label} ${requestedLabel} (${app.apkmirrorArch}/${app.apkmirrorDpi})`);
+  const metadata = runPythonJson([
+    fromRoot("scripts/apkmirror_download.py"),
+    "--app-name",
+    app.label,
+    "--package-name",
+    app.packageName,
+    "--org",
+    app.apkmirrorOrg,
+    "--repo",
+    app.apkmirrorRepo,
+    "--out-dir",
+    outputDir,
+    "--version",
+    requestedLabel,
+    "--arch",
+    app.apkmirrorArch,
+    "--dpi",
+    app.apkmirrorDpi,
+    "--type",
+    "apk",
+    "--out-file",
+    `${app.id}-${requestedLabel}.apk`,
+    ...(app.apkmirrorFallbackArch ? ["--fallback-arch", app.apkmirrorFallbackArch] : []),
+  ]);
+
+  if (selectedVersion && metadata.version !== selectedVersion) {
+    throw new Error(`${app.label}: APKMirror downloaded ${metadata.version}, expected ${selectedVersion}.`);
+  }
+
+  const downloaded = resolveMaybeRoot(metadata.path);
+  if (!existsSync(downloaded)) {
+    throw new Error(`${app.label}: APKMirror reported a missing downloaded file: ${metadata.path}`);
+  }
+
+  const extension = extname(downloaded).toLowerCase() || ".apk";
+  const destination = replaceExtension(app.input, extension);
+  rmSync(destination, { force: true });
+  renameSync(downloaded, destination);
+  app.input = destination;
+
+  const list = patchesList || await fetchPatchesList();
+  const topRecommendedVersion = recommendedVersionFor(app, list);
+  const compatible = compatibleVersionsFor(app, list);
+
+  await writeJson(metadataFile, {
+    app: app.id,
+    packageName: app.packageName,
+    sourcePage: metadata.sourcePage,
+    source: "apkmirror",
+    directUrl: metadata.downloadUrl,
+    downloadPage: metadata.downloadPage,
+    variantPage: metadata.variantPage,
+    destination,
+    version: metadata.version,
+    versionCode: metadata.versionCode,
+    fileType: metadata.fileType,
+    arch: metadata.arch,
+    dpi: metadata.dpi,
+    minAndroidVersion: metadata.minAndroidVersion,
+    desiredVersion,
+    fallbackFromVersion,
+    fallbackReason,
+    forcePatchRequired,
+    morpheTopRecommendedVersion: topRecommendedVersion,
+    availableCompatibleVersions: compatible.filter((version) => version === metadata.version),
+    filename: basename(destination),
+    size: metadata.size,
     downloadedAt: new Date().toISOString(),
   });
 }
@@ -1000,6 +1210,14 @@ async function readJson(file) {
   }
 }
 
+function metadataFileFor(app) {
+  return fromRoot(".cache/apks", `${app.id}.json`);
+}
+
+async function readApkMetadata(app) {
+  return await readJson(metadataFileFor(app)) || await readJson(fromRoot(".cache/apkpure", `${app.id}.json`));
+}
+
 function clean() {
   rmSync(fromRoot(".cache"), { recursive: true, force: true });
   console.log("Removed .cache");
@@ -1023,15 +1241,21 @@ Environment:
   YOUTUBE_MUSIC_APK          Local input path for YouTube Music.
   YOUTUBE_APK_URL            Private direct URL for CI input.
   YOUTUBE_MUSIC_APK_URL      Private direct URL for CI input.
-  APK_SOURCE                 apkpure or local. Defaults to apkpure.
+  APK_SOURCE                 Comma-separated source order: apkmirror, apkpure, local, or auto.
+                              Defaults to apkpure.
   APK_VERSION_SOURCE         recommended, latest, or an explicit version. Defaults to recommended.
   YOUTUBE_APK_VERSION        Explicit YouTube APK versionName override.
   YOUTUBE_MUSIC_APK_VERSION  Explicit YouTube Music APK versionName override.
+  APKMIRROR_ARCH             Optional APKMirror architecture override.
+  APKMIRROR_DPI              Optional APKMirror DPI override. Defaults to nodpi.
+  YOUTUBE_APKMIRROR_ARCH     YouTube APKMirror architecture. Defaults to universal.
+  YOUTUBE_MUSIC_APKMIRROR_ARCH
+                              YouTube Music APKMirror architecture. Defaults to arm64-v8a.
   YOUTUBE_PATCHED_PACKAGE_NAME
                               Defaults to com.mistu.android.youtube.
   YOUTUBE_MUSIC_PATCHED_PACKAGE_NAME
                               Defaults to com.mistu.android.youtube.music.
-  AUTO_UPDATE_APKS           Set to 1 to refresh existing APKPure downloads during build.
+  AUTO_UPDATE_APKS           Set to 1 to refresh existing APK downloads during build.
   PYTHON_BIN                 Python executable for the APKPure downloader. Defaults to python.
   KEYSTORE_FILE              Optional signing keystore path.
   MORPHE_EXTRA_ARGS_JSON     Optional JSON array of extra patch args.`);

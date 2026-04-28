@@ -199,7 +199,7 @@ jobs:
           BUILD_TARGETS: ${{ inputs.targets }}
           MORPHE_CLI_VERSION: ${{ inputs.cli_version }}
           MORPHE_PATCHES_VERSION: ${{ inputs.patches_version }}
-          APK_SOURCE: apkpure
+          APK_SOURCE: apkmirror,apkpure
           APK_VERSION_SOURCE: ${{ inputs.apk_version_source }}
           YOUTUBE_APK_URL: ${{ secrets.YOUTUBE_APK_URL }}
           YOUTUBE_MUSIC_APK_URL: ${{ secrets.YOUTUBE_MUSIC_APK_URL }}
