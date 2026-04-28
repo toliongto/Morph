@@ -90,6 +90,9 @@ async function main() {
     case "versions":
       await printVersions();
       break;
+    case "release-notes":
+      await printReleaseNotes();
+      break;
     case "clean":
       clean();
       break;
@@ -234,6 +237,56 @@ async function printVersions() {
   for (const [packageName, versions] of [...packages.entries()].sort()) {
     console.log(`${packageName}: ${[...versions].sort().reverse().join(", ")}`);
   }
+}
+
+async function printReleaseNotes() {
+  const apps = selectedApps();
+  const cliMeta = await readJson(releaseAssets.cli.meta);
+  const patchesMeta = await readJson(releaseAssets.patches.meta);
+  const patchArgs = parseJsonArrayEnv("MORPHE_EXTRA_ARGS_JSON");
+  const lines = [];
+
+  lines.push("Automated patched APK build.");
+  lines.push("");
+  lines.push("## Build Summary");
+  lines.push("");
+  lines.push(`- Targets: ${apps.map((app) => app.label).join(", ")}`);
+  lines.push(`- Morphe CLI: ${cliMeta?.tag || env("MORPHE_CLI_VERSION") || "latest"}`);
+  lines.push(`- Morphe patches: ${patchesMeta?.tag || env("MORPHE_PATCHES_VERSION") || "latest"}`);
+  lines.push(`- Patch args: ${patchArgs.length ? patchArgs.join(" ") : "none"}`);
+  lines.push("");
+
+  for (const app of apps) {
+    const result = await readJson(app.result);
+    const apkMeta = await readJson(fromRoot(".cache/apkpure", `${app.id}.json`));
+    const apkVersion = result?.packageVersion || apkMeta?.version || "unknown";
+    const packageName = result?.packageName || app.packageName;
+    const applied = patchesFrom(result?.appliedPatches);
+    const failed = failedPatchesFrom(result?.failedPatches);
+    const stepFailures = stepFailuresFrom(result?.patchingSteps);
+    const buildResult = result
+      ? result.success === false ? "completed with patch failures" : "successful"
+      : "unknown; result file missing";
+
+    lines.push(`## ${app.label}`);
+    lines.push("");
+    lines.push(`- APK version: ${apkVersion}`);
+    lines.push(`- Package: ${packageName}`);
+    if (apkMeta?.filename) lines.push(`- Source APK: ${apkMeta.filename}${apkMeta.size ? ` (${apkMeta.size})` : ""}`);
+    lines.push(`- Build result: ${buildResult}`);
+    lines.push(`- Successful patches (${applied.length}): ${applied.length ? applied.join(", ") : "none"}`);
+    lines.push(`- Failed patches (${failed.length}): ${failed.length ? failed.map(formatFailedPatch).join("; ") : "none"}`);
+    if (stepFailures.length) {
+      lines.push(`- Failed build steps: ${stepFailures.join("; ")}`);
+    }
+    lines.push("");
+  }
+
+  lines.push("Review the attached `*-result.json` files for full patching details.");
+  lines.push("");
+  lines.push("Warning: `--continue-on-error` can produce a partially patched APK if any patch fails.");
+
+  console.log(lines.join("\n"));
 }
 
 function selectedApps() {
@@ -439,6 +492,7 @@ function printHelp() {
   node scripts/morphe.mjs options [--target youtube]
   node scripts/morphe.mjs tools [--refresh-tools]
   node scripts/morphe.mjs versions
+  node scripts/morphe.mjs release-notes
   node scripts/morphe.mjs clean
 
 Environment:
@@ -526,6 +580,46 @@ function envNameFor(id) {
 
 function truthy(value) {
   return ["1", "true", "yes", "on"].includes((value || "").toLowerCase());
+}
+
+function patchesFrom(patches) {
+  return Array.isArray(patches)
+    ? patches.map(patchName).filter(Boolean)
+    : [];
+}
+
+function failedPatchesFrom(patches) {
+  return Array.isArray(patches)
+    ? patches.map((entry) => ({
+        name: patchName(entry?.patch),
+        reason: firstReasonLine(entry?.reason),
+      })).filter((entry) => entry.name)
+    : [];
+}
+
+function patchName(patch) {
+  if (patch?.name) return patch.name;
+  if (Number.isInteger(patch?.index)) return `#${patch.index}`;
+  return "";
+}
+
+function stepFailuresFrom(steps) {
+  return Array.isArray(steps)
+    ? steps
+        .filter((step) => step?.success === false)
+        .map((step) => `${step.step}${step.message ? `: ${firstReasonLine(step.message)}` : ""}`)
+    : [];
+}
+
+function formatFailedPatch(entry) {
+  return entry.reason ? `${entry.name} (${entry.reason})` : entry.name;
+}
+
+function firstReasonLine(reason) {
+  return String(reason || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || "";
 }
 
 function apkpureLatestUrl(app) {

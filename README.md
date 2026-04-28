@@ -143,6 +143,13 @@ The workflow creates a GitHub Release named like:
 Morph patched APKs YYYY-MM-DD #RUN_NUMBER
 ```
 
+The release notes include a short bullet summary with:
+
+- Morphe CLI and patch bundle versions
+- APK version and package for each target
+- Successful patch names
+- Failed patch names and first error line
+
 The release includes:
 
 - `output/*.apk`

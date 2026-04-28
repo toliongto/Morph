@@ -96,11 +96,7 @@ jobs:
       - name: Prepare release metadata
         if: ${{ inputs.create_release }}
         env:
-          TARGETS: ${{ inputs.targets }}
-          CLI_VERSION: ${{ inputs.cli_version }}
-          PATCHES_VERSION: ${{ inputs.patches_version }}
-          FORCE_PATCH: ${{ inputs.force_patch }}
-          CONTINUE_ON_ERROR: ${{ inputs.continue_on_error }}
+          BUILD_TARGETS: ${{ inputs.targets }}
         run: |
           release_date="$(date -u +'%Y-%m-%d')"
           release_stamp="$(date -u +'%Y%m%d-%H%M%S')"
@@ -109,18 +105,7 @@ jobs:
           echo "RELEASE_TAG=${tag}" >> "$GITHUB_ENV"
           echo "RELEASE_NAME=Morph patched APKs ${release_date} #${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
 
-          {
-            echo "Automated patched APK build."
-            echo
-            echo "- Targets: ${TARGETS}"
-            echo "- Morphe CLI: ${CLI_VERSION}"
-            echo "- Morphe patches: ${PATCHES_VERSION}"
-            echo "- Patch args: ${MORPHE_EXTRA_ARGS_JSON}"
-            echo "- Force compatibility check: ${FORCE_PATCH}"
-            echo "- Continue on patch error: ${CONTINUE_ON_ERROR}"
-            echo
-            echo "Warning: --continue-on-error can produce a partially patched APK if any patch fails. Check the attached *-result.json files."
-          } > release-notes.md
+          node scripts/morphe.mjs release-notes > release-notes.md
 
       - name: Create GitHub Release
         if: ${{ inputs.create_release }}
