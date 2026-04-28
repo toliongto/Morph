@@ -2,7 +2,7 @@
 
 Automation for building Morphe-patched YouTube and YouTube Music APKs.
 
-The builder downloads the selected Morphe CLI and patch bundle, gets source APKs, applies Morphe patches, changes the patched package names to Mistu defaults, and signs with a configured private keystore when one is available.
+The builder downloads the selected Morphe CLI and patch bundle, gets source APKs, applies Morphe patches, and signs with a configured private keystore when one is available.
 
 The repository automation can also watch Morphe patch releases weekly and trigger a new build/release when the upstream patch tag changes.
 
