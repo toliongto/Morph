@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -19,6 +19,7 @@ const passthroughArgs = passthroughIndex === -1
 const paths = {
   tools: fromRoot(".cache/tools"),
   tmp: fromRoot(".cache/tmp"),
+  apkpure: fromRoot(".cache/apkpure"),
   input: fromRoot("input"),
   output: fromRoot("output"),
 };
@@ -28,6 +29,8 @@ const appConfigs = {
     id: "youtube",
     label: "YouTube",
     packageName: "com.google.android.youtube",
+    apkpureSlug: "youtube-2025",
+    apkpurePage: "https://apkpure.com/youtube-2025/com.google.android.youtube",
     input: envPath("YOUTUBE_APK", "input/youtube.apk"),
     url: env("YOUTUBE_APK_URL"),
     output: envPath("YOUTUBE_OUT", "output/youtube-patched.apk"),
@@ -38,6 +41,8 @@ const appConfigs = {
     id: "youtube-music",
     label: "YouTube Music",
     packageName: "com.google.android.apps.youtube.music",
+    apkpureSlug: "youtube-music",
+    apkpurePage: "https://apkpure.com/youtube-music/com.google.android.apps.youtube.music",
     input: envPath("YOUTUBE_MUSIC_APK", "input/youtube-music.apk"),
     url: env("YOUTUBE_MUSIC_APK_URL"),
     output: envPath("YOUTUBE_MUSIC_OUT", "output/youtube-music-patched.apk"),
@@ -72,6 +77,9 @@ async function main() {
   switch (command) {
     case "build":
       await build();
+      break;
+    case "download":
+      await downloadApks({ force: flag("force-download") });
       break;
     case "options":
       await createOptions();
@@ -130,6 +138,12 @@ async function build() {
 
     console.log(`\n==> Building ${app.label}`);
     run("java", args);
+  }
+}
+
+async function downloadApks({ force = false } = {}) {
+  for (const app of selectedApps()) {
+    await downloadApkpureLatest(app, { force });
   }
 }
 
@@ -194,15 +208,19 @@ async function downloadReleaseAsset(config, force) {
 }
 
 async function printVersions() {
-  const [cliRelease, patchesRelease, patchesList] = await Promise.all([
+  const [cliRelease, patchesRelease, patchesList, youtubeLatest, musicLatest] = await Promise.all([
     githubJson("https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest"),
     githubJson("https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest"),
     githubJson("https://raw.githubusercontent.com/MorpheApp/morphe-patches/main/patches-list.json"),
+    inspectApkpureLatest(appConfigs.youtube),
+    inspectApkpureLatest(appConfigs["youtube-music"]),
   ]);
 
   console.log(`Morphe CLI latest: ${cliRelease.tag_name}`);
   console.log(`Morphe patches latest: ${patchesRelease.tag_name}`);
   console.log(`Patch list version: ${patchesList.version}`);
+  console.log(`APKPure latest YouTube: ${youtubeLatest.version || "unknown"} (${youtubeLatest.size || "unknown size"})`);
+  console.log(`APKPure latest YouTube Music: ${musicLatest.version || "unknown"} (${musicLatest.size || "unknown size"})`);
 
   const packages = new Map();
   for (const patch of patchesList.patches) {
@@ -235,7 +253,8 @@ function selectedApps() {
 }
 
 async function ensureInput(app) {
-  if (existsSync(app.input)) return;
+  const apkpureMode = (env("APK_SOURCE") || "apkpure").toLowerCase();
+  if (existsSync(app.input) && !(apkpureMode === "apkpure" && truthy(env("AUTO_UPDATE_APKS")))) return;
 
   if (app.url) {
     mkdirSync(dirname(app.input), { recursive: true });
@@ -244,9 +263,78 @@ async function ensureInput(app) {
     return;
   }
 
+  if (apkpureMode === "apkpure") {
+    await downloadApkpureLatest(app, { force: truthy(env("AUTO_UPDATE_APKS")) });
+    return;
+  }
+
   throw new Error(
-    `${app.label} input is missing. Put it at ${relative(app.input)} or set ${envNameFor(app.id)}_URL.`,
+    `${app.label} input is missing. Put it at ${relative(app.input)}, set ${envNameFor(app.id)}_URL, or set APK_SOURCE=apkpure.`,
   );
+}
+
+async function downloadApkpureLatest(app, { force = false } = {}) {
+  mkdirSync(paths.apkpure, { recursive: true });
+  mkdirSync(dirname(app.input), { recursive: true });
+
+  const latest = await inspectApkpureLatest(app);
+  const metadataFile = fromRoot(".cache/apkpure", `${app.id}.json`);
+  const existing = await readJson(metadataFile);
+
+  if (
+    !force &&
+    existsSync(app.input) &&
+    latest.version &&
+    existing?.version === latest.version &&
+    existing?.destination === app.input
+  ) {
+    console.log(`${app.label} ${latest.version} already downloaded at ${relative(app.input)}`);
+    return;
+  }
+
+  if (!force && existsSync(app.input) && !existing?.version) {
+    console.log(`${app.label} input already exists at ${relative(app.input)}; keeping it. Use --force-download or AUTO_UPDATE_APKS=1 to refresh.`);
+    return;
+  }
+
+  console.log(`Downloading APKPure latest ${app.label}${latest.version ? ` ${latest.version}` : ""}`);
+  const tempFile = `${app.input}.download`;
+  rmSync(tempFile, { force: true });
+  await downloadFile(apkpureLatestUrl(app), tempFile, apkpureHeaders());
+  renameSync(tempFile, app.input);
+
+  await writeJson(metadataFile, {
+    app: app.id,
+    packageName: app.packageName,
+    sourcePage: app.apkpurePage,
+    directUrl: apkpureLatestUrl(app),
+    destination: app.input,
+    version: latest.version,
+    size: latest.size,
+    filename: latest.filename,
+    downloadedAt: new Date().toISOString(),
+  });
+}
+
+async function inspectApkpureLatest(app) {
+  const response = await fetch(apkpureLatestUrl(app), {
+    method: "HEAD",
+    redirect: "follow",
+    headers: apkpureHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`APKPure latest check failed for ${app.label} (${response.status})`);
+  }
+
+  const contentDisposition = response.headers.get("content-disposition") || "";
+  const filename = parseHeaderFilename(contentDisposition);
+
+  return {
+    version: parseApkpureVersion(filename),
+    filename,
+    size: formatBytes(Number(response.headers.get("content-length") || 0)),
+  };
 }
 
 function appendSigningArgs(args) {
@@ -304,10 +392,11 @@ async function githubJson(url) {
   return response.json();
 }
 
-async function downloadFile(url, destination) {
+async function downloadFile(url, destination, headers = {}) {
   const response = await fetch(url, {
     headers: {
       "User-Agent": "morph-youtube-builder",
+      ...headers,
       ...(env("GITHUB_TOKEN") && url.includes("github.com")
         ? { Authorization: `Bearer ${env("GITHUB_TOKEN")}` }
         : {}),
@@ -328,6 +417,16 @@ async function writeJson(file, data) {
   await writeFile(file, `${JSON.stringify(data, null, 2)}\n`);
 }
 
+async function readJson(file) {
+  if (!existsSync(file)) return null;
+  const { readFile } = await import("node:fs/promises");
+  try {
+    return JSON.parse(await readFile(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function clean() {
   rmSync(fromRoot(".cache"), { recursive: true, force: true });
   console.log("Removed .cache");
@@ -336,6 +435,7 @@ function clean() {
 function printHelp() {
   console.log(`Usage:
   node scripts/morphe.mjs build [--target youtube] [--target youtube-music] [-- <morphe-cli patch args>]
+  node scripts/morphe.mjs download [--target youtube] [--force-download]
   node scripts/morphe.mjs options [--target youtube]
   node scripts/morphe.mjs tools [--refresh-tools]
   node scripts/morphe.mjs versions
@@ -349,6 +449,8 @@ Environment:
   YOUTUBE_MUSIC_APK          Local input path for YouTube Music.
   YOUTUBE_APK_URL            Private direct URL for CI input.
   YOUTUBE_MUSIC_APK_URL      Private direct URL for CI input.
+  APK_SOURCE                 apkpure or local. Defaults to apkpure.
+  AUTO_UPDATE_APKS           Set to 1 to refresh existing APKPure downloads during build.
   KEYSTORE_FILE              Optional signing keystore path.
   MORPHE_EXTRA_ARGS_JSON     Optional JSON array of extra patch args.`);
 }
@@ -424,6 +526,43 @@ function envNameFor(id) {
 
 function truthy(value) {
   return ["1", "true", "yes", "on"].includes((value || "").toLowerCase());
+}
+
+function apkpureLatestUrl(app) {
+  return `https://d.apkpure.net/b/APK/${encodeURIComponent(app.packageName)}?version=latest`;
+}
+
+function apkpureHeaders() {
+  return {
+    "Accept": "application/vnd.android.package-archive,*/*",
+    "Referer": "https://apkpure.net/",
+    "User-Agent": "Mozilla/5.0 morph-youtube-builder",
+  };
+}
+
+function parseHeaderFilename(contentDisposition) {
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) return decodeURIComponent(utf8Match[1].replace(/^"|"$/g, ""));
+
+  const asciiMatch = contentDisposition.match(/filename="([^"]+)"/i) || contentDisposition.match(/filename=([^;]+)/i);
+  return asciiMatch ? asciiMatch[1].trim().replace(/^"|"$/g, "") : "";
+}
+
+function parseApkpureVersion(filename) {
+  const match = filename.match(/_(\d+(?:\.\d+)+)_APKPure\.(?:apk|xapk|apks)$/i);
+  return match?.[1] || "";
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 function usableFile(file) {
