@@ -28,6 +28,7 @@ const appConfigs = {
   youtube: {
     id: "youtube",
     label: "YouTube",
+    apkpureName: "YouTube",
     packageName: "com.google.android.youtube",
     apkpureSlug: "youtube-2025",
     apkpurePage: "https://apkpure.com/youtube-2025/com.google.android.youtube",
@@ -41,6 +42,7 @@ const appConfigs = {
   "youtube-music": {
     id: "youtube-music",
     label: "YouTube Music",
+    apkpureName: "YouTube Music",
     packageName: "com.google.android.apps.youtube.music",
     apkpureSlug: "youtube-music",
     apkpurePage: "https://apkpure.com/youtube-music/com.google.android.apps.youtube.music",
@@ -185,13 +187,12 @@ async function createOptions() {
 async function ensureTools(force = false) {
   mkdirSync(paths.tools, { recursive: true });
 
-  const [cli, patches, apkeep] = await Promise.all([
+  const [cli, patches] = await Promise.all([
     downloadReleaseAsset(releaseAssets.cli, force),
     downloadReleaseAsset(releaseAssets.patches, force),
-    ensureApkeep(force),
   ]);
 
-  return { cli, patches, apkeep };
+  return { cli, patches };
 }
 
 async function downloadReleaseAsset(config, force) {
@@ -459,7 +460,14 @@ async function downloadApkpureApp(app, { force = false, patchesList = null } = {
 
   if (desiredVersion) {
     try {
-      return await downloadWithApkeep(app, { desiredVersion, force, patchesList, metadataFile, existing });
+      return await downloadWithPythonApkpure(app, {
+        selectedVersion: desiredVersion,
+        force,
+        patchesList,
+        metadataFile,
+        existing,
+        desiredVersion,
+      });
     } catch (error) {
       if (!shouldFallbackToLatest(app)) throw error;
 
@@ -485,7 +493,6 @@ function shouldFallbackToLatest(app) {
 
 async function downloadApkpureLatestApp(app, { force = false, metadataFile, existing, desiredVersion = "", fallbackReason = "" }) {
   const selected = await inspectApkpureLatest(app);
-  const selectedUrl = apkpureDownloadUrl(app);
 
   if (
     !force &&
@@ -503,26 +510,109 @@ async function downloadApkpureLatestApp(app, { force = false, metadataFile, exis
     return;
   }
 
-  console.log(`Downloading APKPure ${app.label}${selected.version ? ` ${selected.version}` : ""}`);
-  const tempFile = `${app.input}.download`;
-  rmSync(tempFile, { force: true });
-  await downloadFile(selectedUrl, tempFile, apkpureHeaders());
-  renameSync(tempFile, app.input);
+  return downloadWithPythonApkpure(app, {
+    selectedVersion: "",
+    force: true,
+    patchesList: null,
+    metadataFile,
+    existing,
+    desiredVersion,
+    fallbackFromVersion: fallbackReason ? desiredVersion : "",
+    fallbackReason,
+    forcePatchRequired: Boolean(fallbackReason),
+    expectedVersion: selected.version,
+  });
+}
+
+async function downloadWithPythonApkpure(
+  app,
+  {
+    selectedVersion = "",
+    force = false,
+    patchesList = null,
+    metadataFile,
+    existing,
+    desiredVersion = "",
+    fallbackFromVersion = "",
+    fallbackReason = "",
+    forcePatchRequired = false,
+    expectedVersion = "",
+  },
+) {
+  if (
+    selectedVersion &&
+    !force &&
+    existing?.source === "apkpure-python" &&
+    existing?.version === selectedVersion &&
+    existing?.destination &&
+    existsSync(existing.destination)
+  ) {
+    app.input = existing.destination;
+    console.log(`${app.label} ${selectedVersion} already downloaded at ${relative(app.input)}`);
+    return;
+  }
+
+  const outputDir = fromRoot(".cache/apkpure-python", app.id);
+  rmSync(outputDir, { recursive: true, force: true });
+  mkdirSync(outputDir, { recursive: true });
+
+  const requestedLabel = selectedVersion || "latest";
+  console.log(`Downloading APKPure ${app.label} ${requestedLabel} with Python apkpure`);
+  const metadata = runPythonJson([
+    fromRoot("scripts/apkpure_download.py"),
+    "--app-name",
+    app.apkpureName,
+    "--package-name",
+    app.packageName,
+    "--source-page",
+    app.apkpurePage,
+    "--out-dir",
+    outputDir,
+    ...(selectedVersion ? ["--version", selectedVersion] : []),
+  ]);
+
+  if (selectedVersion && metadata.version !== selectedVersion) {
+    throw new Error(`${app.label}: Python apkpure downloaded ${metadata.version}, expected ${selectedVersion}.`);
+  }
+
+  if (expectedVersion && metadata.version !== expectedVersion) {
+    console.warn(`${app.label}: APKPure latest metadata reported ${expectedVersion}, Python apkpure downloaded ${metadata.version}.`);
+  }
+
+  const downloaded = resolveMaybeRoot(metadata.path);
+  if (!existsSync(downloaded)) {
+    throw new Error(`${app.label}: Python apkpure reported a missing downloaded file: ${metadata.path}`);
+  }
+
+  const extension = extname(downloaded).toLowerCase() || ".apk";
+  const destination = replaceExtension(app.input, extension);
+  rmSync(destination, { force: true });
+  renameSync(downloaded, destination);
+  app.input = destination;
+
+  const list = patchesList || await fetchPatchesList();
+  const topRecommendedVersion = recommendedVersionFor(app, list);
+  const compatible = compatibleVersionsFor(app, list);
+  const availableVersions = Array.isArray(metadata.availableVersions) ? metadata.availableVersions : [];
 
   await writeJson(metadataFile, {
     app: app.id,
     packageName: app.packageName,
     sourcePage: app.apkpurePage,
-    source: "apkpure-direct",
-    directUrl: selectedUrl,
-    destination: app.input,
-    version: selected.version,
+    source: "apkpure-python",
+    directUrl: metadata.downloadUrl,
+    downloadPage: metadata.downloadPage,
+    destination,
+    version: metadata.version,
+    versionCode: metadata.versionCode,
+    fileType: metadata.fileType,
     desiredVersion,
-    fallbackFromVersion: fallbackReason ? desiredVersion : "",
+    fallbackFromVersion,
     fallbackReason,
-    forcePatchRequired: Boolean(fallbackReason),
-    size: selected.size,
-    filename: selected.filename,
+    forcePatchRequired,
+    morpheTopRecommendedVersion: topRecommendedVersion,
+    availableCompatibleVersions: compatible.filter((version) => availableVersions.includes(version)),
+    filename: basename(destination),
     downloadedAt: new Date().toISOString(),
   });
 }
@@ -673,6 +763,33 @@ function runCapture(commandName, args) {
   return `${result.stdout || ""}${result.stderr || ""}`;
 }
 
+function runPythonJson(args) {
+  const commandName = pythonCommand();
+  const result = spawnSync(commandName, args, {
+    cwd: root,
+    env: process.env,
+    encoding: "utf8",
+  });
+
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`${commandName} exited with status ${result.status}: ${result.stderr || result.stdout}`);
+  }
+
+  const stdout = (result.stdout || "").trim();
+  if (!stdout) throw new Error(`${commandName} produced no JSON output`);
+
+  try {
+    return JSON.parse(stdout);
+  } catch (error) {
+    throw new Error(`${commandName} produced invalid JSON: ${stdout}`);
+  }
+}
+
+function pythonCommand() {
+  return env("PYTHON_BIN") || "python";
+}
+
 async function githubJson(url) {
   const response = await fetch(url, {
     headers: {
@@ -752,6 +869,7 @@ Environment:
   YOUTUBE_APK_VERSION        Explicit YouTube APK versionName override.
   YOUTUBE_MUSIC_APK_VERSION  Explicit YouTube Music APK versionName override.
   AUTO_UPDATE_APKS           Set to 1 to refresh existing APKPure downloads during build.
+  PYTHON_BIN                 Python executable for the APKPure downloader. Defaults to python.
   KEYSTORE_FILE              Optional signing keystore path.
   MORPHE_EXTRA_ARGS_JSON     Optional JSON array of extra patch args.`);
 }
