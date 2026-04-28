@@ -129,7 +129,26 @@ Optional signing secrets:
 
 Then run **Actions -> Build patched APKs -> Run workflow**.
 
-The workflow artifact retention is intentionally set to `1` day. Avoid using a public repository or public release uploads for patched proprietary APKs unless you have the rights to distribute them.
+By default, manual workflow runs now pass these Morphe CLI patch flags:
+
+```text
+--force --continue-on-error
+```
+
+`--force` skips Morphe's APK version compatibility gate. `--continue-on-error` lets the build finish if one patch fails, but that can produce a partially patched APK. Always check the attached `*-result.json` files.
+
+The workflow creates a GitHub Release named like:
+
+```text
+Morph patched APKs YYYY-MM-DD #RUN_NUMBER
+```
+
+The release includes:
+
+- `output/*.apk`
+- `output/*-result.json`
+
+The workflow also keeps the one-day artifact upload as a fallback. Avoid using a public repository or public release uploads for patched proprietary APKs unless you have the rights to distribute them.
 
 ## Compatibility Note
 

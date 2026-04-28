@@ -15,6 +15,21 @@ on:
         description: "Morphe patches tag, or latest"
         required: true
         default: "latest"
+      force_patch:
+        description: "Pass --force to skip Morphe APK version compatibility checks"
+        required: true
+        type: boolean
+        default: true
+      continue_on_error:
+        description: "Pass --continue-on-error so compatible patches can still be applied if one patch fails"
+        required: true
+        type: boolean
+        default: true
+      create_release:
+        description: "Create a GitHub Release and attach patched APKs"
+        required: true
+        type: boolean
+        default: true
       upload_artifact:
         description: "Upload patched APKs as a short-lived workflow artifact"
         required: true
@@ -26,7 +41,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Check out repository
@@ -53,6 +68,18 @@ jobs:
             echo "KEYSTORE_FILE=.secrets/signing.keystore" >> "$GITHUB_ENV"
           fi
 
+      - name: Configure Morphe patch flags
+        env:
+          FORCE_PATCH: ${{ inputs.force_patch }}
+          CONTINUE_ON_ERROR: ${{ inputs.continue_on_error }}
+        run: |
+          node <<'NODE' >> "$GITHUB_ENV"
+          const args = [];
+          if (process.env.FORCE_PATCH === 'true') args.push('--force');
+          if (process.env.CONTINUE_ON_ERROR === 'true') args.push('--continue-on-error');
+          console.log(`MORPHE_EXTRA_ARGS_JSON=${JSON.stringify(args)}`);
+          NODE
+
       - name: Build patched APKs
         env:
           BUILD_TARGETS: ${{ inputs.targets }}
@@ -65,6 +92,46 @@ jobs:
           KEYSTORE_ALIAS: ${{ secrets.APK_KEYSTORE_ALIAS }}
           KEYSTORE_ENTRY_PASSWORD: ${{ secrets.APK_KEYSTORE_ENTRY_PASSWORD }}
         run: node scripts/morphe.mjs build
+
+      - name: Prepare release metadata
+        if: ${{ inputs.create_release }}
+        env:
+          TARGETS: ${{ inputs.targets }}
+          CLI_VERSION: ${{ inputs.cli_version }}
+          PATCHES_VERSION: ${{ inputs.patches_version }}
+          FORCE_PATCH: ${{ inputs.force_patch }}
+          CONTINUE_ON_ERROR: ${{ inputs.continue_on_error }}
+        run: |
+          release_date="$(date -u +'%Y-%m-%d')"
+          release_stamp="$(date -u +'%Y%m%d-%H%M%S')"
+          tag="build-${release_stamp}-${GITHUB_RUN_NUMBER}"
+
+          echo "RELEASE_TAG=${tag}" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=Morph patched APKs ${release_date} #${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
+          {
+            echo "Automated patched APK build."
+            echo
+            echo "- Targets: ${TARGETS}"
+            echo "- Morphe CLI: ${CLI_VERSION}"
+            echo "- Morphe patches: ${PATCHES_VERSION}"
+            echo "- Patch args: ${MORPHE_EXTRA_ARGS_JSON}"
+            echo "- Force compatibility check: ${FORCE_PATCH}"
+            echo "- Continue on patch error: ${CONTINUE_ON_ERROR}"
+            echo
+            echo "Warning: --continue-on-error can produce a partially patched APK if any patch fails. Check the attached *-result.json files."
+          } > release-notes.md
+
+      - name: Create GitHub Release
+        if: ${{ inputs.create_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            output/*.apk \
+            output/*-result.json \
+            --title "$RELEASE_NAME" \
+            --notes-file release-notes.md
 
       - name: Upload patched APKs
         if: ${{ inputs.upload_artifact }}
