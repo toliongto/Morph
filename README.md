@@ -125,54 +125,6 @@ You can pass extra Morphe CLI patch arguments after `--`:
 node scripts/morphe.mjs build --target youtube -- --disable "Custom branding"
 ```
 
-## GitHub Actions
-
-The workflow at `.github/workflows/build.yml` downloads APKs automatically in the clean CI workspace, using Morphe's recommended versions by default.
-
-You can still override APKPure with private APK URLs. Add these repository secrets:
-
-- `YOUTUBE_APK_URL`: optional private direct URL to your original YouTube APK.
-- `YOUTUBE_MUSIC_APK_URL`: optional private direct URL to your original YouTube Music APK.
-
-Optional signing secrets:
-
-- `APK_KEYSTORE_B64`: base64-encoded keystore file.
-- `APK_KEYSTORE_PASSWORD`
-- `APK_KEYSTORE_ALIAS`
-- `APK_KEYSTORE_ENTRY_PASSWORD`
-
-Then run **Actions -> Build patched APKs -> Run workflow**.
-
-The workflow defaults `apk_version_source` to `recommended`, so each run requires the exact highest compatible YouTube and YouTube Music versions declared by the selected Morphe patch release.
-
-By default, manual workflow runs now pass these Morphe CLI patch flags:
-
-```text
---force --continue-on-error
-```
-
-`--force` skips Morphe's APK version compatibility gate. `--continue-on-error` lets the build finish if one patch fails, but that can produce a partially patched APK. Always check the attached `*-result.json` files.
-
-The workflow creates a GitHub Release named like:
-
-```text
-Morph patched APKs YYYY-MM-DD #RUN_NUMBER
-```
-
-The release notes include a short bullet summary with:
-
-- Morphe CLI and patch bundle versions
-- APK version and package for each target
-- Successful patch names
-- Failed patch names and first error line
-
-The release includes:
-
-- `output/*.apk`
-- `output/*-result.json`
-
-The workflow also keeps the one-day artifact upload as a fallback. Avoid using a public repository or public release uploads for patched proprietary APKs unless you have the rights to distribute them.
-
 ## Scheduled Builds
 
 `.github/workflows/watch-morphe-patches.yml` runs every 6 hours and checks the latest release from `MorpheApp/morphe-patches`.
