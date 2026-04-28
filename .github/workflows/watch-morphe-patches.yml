@@ -1,0 +1,43 @@
+name: Watch Morphe patches
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  watch:
+    name: Trigger build on new patch release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Check latest Morphe patch release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest="$(gh api repos/MorpheApp/morphe-patches/releases/latest --jq '.tag_name')"
+          previous="$(gh variable get LAST_MORPHE_PATCHES_RELEASE 2>/dev/null || true)"
+
+          echo "Latest Morphe patches release: ${latest}"
+          echo "Last triggered release: ${previous:-none}"
+
+          if [ "$latest" = "$previous" ]; then
+            echo "No new Morphe patch release found."
+            exit 0
+          fi
+
+          gh workflow run build.yml \
+            --ref "${GITHUB_REF_NAME}" \
+            -f targets="youtube,youtube-music" \
+            -f cli_version="latest" \
+            -f patches_version="${latest}" \
+            -f apk_version_source="recommended" \
+            -f force_patch="true" \
+            -f continue_on_error="true" \
+            -f create_release="true" \
+            -f upload_artifact="true"
+
+          echo "Triggered build workflow for Morphe patches ${latest}."

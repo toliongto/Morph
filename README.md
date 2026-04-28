@@ -29,7 +29,7 @@ Requirements:
 - Java 17+
 - Internet access, or original APKs you are legally allowed to patch
 
-By default, the build script downloads the latest APKPure APKs when the input files are missing:
+By default, the build script uses the latest APK versions recommended by the selected Morphe patch release. Those recommended versions come from Morphe's `patches-list.json`.
 
 ```bash
 node scripts/morphe.mjs download
@@ -42,6 +42,19 @@ The downloader uses APKPure's public download host for:
 - [YouTube Music](https://apkpure.com/youtube-music/com.google.android.apps.youtube.music)
 
 The YouTube Music URL is normalized to `com.google.android.apps.youtube.music`, which is the package used by the current YouTube Music app and Morphe's patch metadata.
+
+APKPure's public latest download is straightforward, but historical downloads use APKPure's own version-code identifier rather than only the visible app version. If APKPure latest does not match Morphe's recommended version, provide either a direct compatible APK URL or an APKPure version code:
+
+- `YOUTUBE_APK_URL`
+- `YOUTUBE_MUSIC_APK_URL`
+- `YOUTUBE_APKPURE_VERSION_CODE`
+- `YOUTUBE_MUSIC_APKPURE_VERSION_CODE`
+
+To deliberately use APKPure latest instead of Morphe's recommended version:
+
+```bash
+APK_VERSION_SOURCE=latest node scripts/morphe.mjs build
+```
 
 To refresh an existing APKPure download:
 
@@ -113,12 +126,14 @@ node scripts/morphe.mjs build --target youtube -- --disable "Custom branding"
 
 ## GitHub Actions
 
-The workflow at `.github/workflows/build.yml` downloads the latest APKPure APKs automatically in the clean CI workspace.
+The workflow at `.github/workflows/build.yml` downloads APKs automatically in the clean CI workspace, using Morphe's recommended versions by default.
 
 You can still override APKPure with private APK URLs. Add these repository secrets:
 
 - `YOUTUBE_APK_URL`: optional private direct URL to your original YouTube APK.
 - `YOUTUBE_MUSIC_APK_URL`: optional private direct URL to your original YouTube Music APK.
+- `YOUTUBE_APKPURE_VERSION_CODE`: optional APKPure version code for Morphe's recommended YouTube version.
+- `YOUTUBE_MUSIC_APKPURE_VERSION_CODE`: optional APKPure version code for Morphe's recommended YouTube Music version.
 
 Optional signing secrets:
 
@@ -128,6 +143,8 @@ Optional signing secrets:
 - `APK_KEYSTORE_ENTRY_PASSWORD`
 
 Then run **Actions -> Build patched APKs -> Run workflow**.
+
+The workflow defaults `apk_version_source` to `recommended`, so each run uses the highest compatible YouTube and YouTube Music versions declared by the selected Morphe patch release.
 
 By default, manual workflow runs now pass these Morphe CLI patch flags:
 
@@ -157,9 +174,21 @@ The release includes:
 
 The workflow also keeps the one-day artifact upload as a fallback. Avoid using a public repository or public release uploads for patched proprietary APKs unless you have the rights to distribute them.
 
+## Scheduled Builds
+
+`.github/workflows/watch-morphe-patches.yml` runs every 6 hours and checks the latest release from `MorpheApp/morphe-patches`.
+
+When a new Morphe patch release appears, it dispatches the build workflow with:
+
+- `patches_version` set to the new Morphe patch tag
+- `apk_version_source` set to `recommended`
+- release creation enabled
+
+After the build workflow creates the Release, it stores the handled Morphe patch release in the repository variable `LAST_MORPHE_PATCHES_RELEASE`. If the build fails, the watcher will try again on a later schedule.
+
 ## Compatibility Note
 
-`node scripts/morphe.mjs download` follows APKPure's latest APK, while Morphe patches only support the versions listed by the patch bundle. On 2026-04-28 APKPure latest was newer than Morphe's listed compatible versions. If patching fails due to version compatibility, provide a compatible APK manually or pass Morphe's `--force` after `--`:
+Morphe patches only support the versions listed by the patch bundle. On 2026-04-28 APKPure latest was newer than Morphe's listed compatible versions. If patching fails due to version compatibility, provide a compatible APK manually or pass Morphe's `--force` after `--`:
 
 ```bash
 node scripts/morphe.mjs build -- --force
