@@ -15,6 +15,8 @@ const commandArgs = passthroughIndex === -1 ? rawArgs : rawArgs.slice(0, passthr
 const passthroughArgs = passthroughIndex === -1
   ? parseJsonArrayEnv("MORPHE_EXTRA_ARGS_JSON")
   : rawArgs.slice(passthroughIndex + 1);
+let selectedPatchReleaseTagPromise = null;
+let patchesListPromise = null;
 
 const paths = {
   tools: fromRoot(".cache/tools"),
@@ -264,16 +266,22 @@ async function ensureApkeep(force = false) {
 }
 
 async function fetchPatchesList() {
-  const tag = await selectedPatchReleaseTag();
-  return githubJson(`https://raw.githubusercontent.com/MorpheApp/morphe-patches/${tag}/patches-list.json`);
+  patchesListPromise ||= (async () => {
+    const tag = await selectedPatchReleaseTag();
+    return githubJson(`https://raw.githubusercontent.com/MorpheApp/morphe-patches/${tag}/patches-list.json`);
+  })();
+  return patchesListPromise;
 }
 
 async function selectedPatchReleaseTag() {
   const version = env("MORPHE_PATCHES_VERSION") || "latest";
   if (version !== "latest") return normalizeTag(version);
 
-  const release = await githubJson("https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest");
-  return release.tag_name;
+  selectedPatchReleaseTagPromise ||= (async () => {
+    const release = await githubJson("https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest");
+    return release.tag_name;
+  })();
+  return selectedPatchReleaseTagPromise;
 }
 
 async function printVersions() {
@@ -815,7 +823,7 @@ async function inspectApkpureLatest(app) {
 }
 
 async function inspectApkpureDownload(app, url) {
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     method: "HEAD",
     redirect: "follow",
     headers: apkpureHeaders(),
@@ -917,7 +925,7 @@ function pythonCommand() {
 }
 
 async function githubJson(url) {
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "morph-youtube-builder",
@@ -933,7 +941,7 @@ async function githubJson(url) {
 }
 
 async function downloadFile(url, destination, headers = {}) {
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     headers: {
       "User-Agent": "morph-youtube-builder",
       ...headers,
@@ -949,6 +957,31 @@ async function downloadFile(url, destination, headers = {}) {
 
   mkdirSync(dirname(destination), { recursive: true });
   await pipeline(Readable.fromWeb(response.body), createWriteStream(destination));
+}
+
+async function fetchWithRetry(url, options = {}, attempts = 4) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, options);
+      if (![408, 425, 429, 500, 502, 503, 504].includes(response.status) || attempt === attempts) {
+        return response;
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) break;
+    }
+
+    await sleep(750 * attempt);
+  }
+
+  throw lastError || new Error(`fetch failed for ${url}`);
+}
+
+function sleep(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
 async function writeJson(file, data) {
