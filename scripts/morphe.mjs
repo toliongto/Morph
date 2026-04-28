@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
@@ -31,7 +31,6 @@ const appConfigs = {
     packageName: "com.google.android.youtube",
     apkpureSlug: "youtube-2025",
     apkpurePage: "https://apkpure.com/youtube-2025/com.google.android.youtube",
-    apkpureVersionCode: env("YOUTUBE_APKPURE_VERSION_CODE"),
     requestedVersion: env("YOUTUBE_APK_VERSION"),
     input: envPath("YOUTUBE_APK", "input/youtube.apk"),
     url: env("YOUTUBE_APK_URL"),
@@ -45,7 +44,6 @@ const appConfigs = {
     packageName: "com.google.android.apps.youtube.music",
     apkpureSlug: "youtube-music",
     apkpurePage: "https://apkpure.com/youtube-music/com.google.android.apps.youtube.music",
-    apkpureVersionCode: env("YOUTUBE_MUSIC_APKPURE_VERSION_CODE"),
     requestedVersion: env("YOUTUBE_MUSIC_APK_VERSION"),
     input: envPath("YOUTUBE_MUSIC_APK", "input/youtube-music.apk"),
     url: env("YOUTUBE_MUSIC_APK_URL"),
@@ -70,6 +68,13 @@ const releaseAssets = {
     output: fromRoot(".cache/tools/patches.mpp"),
     meta: fromRoot(".cache/tools/patches.json"),
   },
+};
+
+const apkeepTool = {
+  repo: "EFForg/apkeep",
+  versionEnv: "APKEEP_VERSION",
+  output: fromRoot(".cache/tools", process.platform === "win32" ? "apkeep.exe" : "apkeep"),
+  meta: fromRoot(".cache/tools/apkeep.json"),
 };
 
 main().catch((error) => {
@@ -179,12 +184,13 @@ async function createOptions() {
 async function ensureTools(force = false) {
   mkdirSync(paths.tools, { recursive: true });
 
-  const [cli, patches] = await Promise.all([
+  const [cli, patches, apkeep] = await Promise.all([
     downloadReleaseAsset(releaseAssets.cli, force),
     downloadReleaseAsset(releaseAssets.patches, force),
+    ensureApkeep(force),
   ]);
 
-  return { cli, patches };
+  return { cli, patches, apkeep };
 }
 
 async function downloadReleaseAsset(config, force) {
@@ -213,6 +219,40 @@ async function downloadReleaseAsset(config, force) {
   });
 
   return config.output;
+}
+
+async function ensureApkeep(force = false) {
+  if (!force && usableFile(apkeepTool.output)) {
+    return apkeepTool.output;
+  }
+
+  const version = env(apkeepTool.versionEnv) || "latest";
+  const releaseUrl = version === "latest"
+    ? `https://api.github.com/repos/${apkeepTool.repo}/releases/latest`
+    : `https://api.github.com/repos/${apkeepTool.repo}/releases/tags/${version}`;
+  const release = await githubJson(releaseUrl);
+  const assetName = apkeepAssetName();
+  const asset = release.assets.find((item) => item.name === assetName);
+
+  if (!asset) {
+    throw new Error(`No ${assetName} release asset found for ${apkeepTool.repo} ${release.tag_name}`);
+  }
+
+  console.log(`Downloading ${apkeepTool.repo} ${release.tag_name}: ${asset.name}`);
+  await downloadFile(asset.browser_download_url, apkeepTool.output);
+
+  if (process.platform !== "win32") {
+    chmodSync(apkeepTool.output, 0o755);
+  }
+
+  await writeJson(apkeepTool.meta, {
+    repo: apkeepTool.repo,
+    tag: release.tag_name,
+    asset: asset.name,
+    downloadedAt: new Date().toISOString(),
+  });
+
+  return apkeepTool.output;
 }
 
 async function fetchPatchesList() {
@@ -266,7 +306,8 @@ async function desiredApkVersion(app, patchesList = null) {
   if (source === "latest") return "";
   if (source === "recommended") {
     const list = patchesList || await fetchPatchesList();
-    return recommendedVersionFor(app, list);
+    const compatible = compatibleVersionsFor(app, list);
+    return compatible[0] || "";
   }
   if (/^\d+(?:\.\d+)+$/.test(source)) return source;
 
@@ -274,6 +315,10 @@ async function desiredApkVersion(app, patchesList = null) {
 }
 
 function recommendedVersionFor(app, patchesList) {
+  return compatibleVersionsFor(app, patchesList)[0] || "";
+}
+
+function compatibleVersionsFor(app, patchesList) {
   const versions = new Set();
 
   for (const patch of patchesList?.patches || []) {
@@ -282,7 +327,7 @@ function recommendedVersionFor(app, patchesList) {
     for (const version of compatible) versions.add(String(version));
   }
 
-  return [...versions].sort(compareVersions).reverse()[0] || "";
+  return [...versions].sort(compareVersions).reverse();
 }
 
 async function printReleaseNotes() {
@@ -320,7 +365,12 @@ async function printReleaseNotes() {
     lines.push(`- APK version: ${apkVersion}`);
     lines.push(`- Package: ${packageName}`);
     if (apkMeta?.filename) lines.push(`- Source APK: ${apkMeta.filename}${apkMeta.size ? ` (${apkMeta.size})` : ""}`);
+    if (apkMeta?.source) lines.push(`- APK source: ${apkMeta.source}`);
     if (apkMeta?.desiredVersion) lines.push(`- Requested APK version: ${apkMeta.desiredVersion}`);
+    if (apkMeta?.morpheTopRecommendedVersion) lines.push(`- Morphe top recommended APK version: ${apkMeta.morpheTopRecommendedVersion}`);
+    if (Array.isArray(apkMeta?.availableCompatibleVersions)) {
+      lines.push(`- APKPure-compatible recommended versions found: ${apkMeta.availableCompatibleVersions.join(", ") || "none"}`);
+    }
     lines.push(`- Build result: ${buildResult}`);
     lines.push(`- Successful patches (${applied.length}): ${applied.length ? applied.join(", ") : "none"}`);
     lines.push(`- Failed patches (${failed.length}): ${failed.length ? failed.map(formatFailedPatch).join("; ") : "none"}`);
@@ -378,31 +428,17 @@ async function downloadApkpureApp(app, { force = false, patchesList = null } = {
   mkdirSync(paths.apkpure, { recursive: true });
   mkdirSync(dirname(app.input), { recursive: true });
 
-  const latest = await inspectApkpureLatest(app);
   const desiredVersion = await desiredApkVersion(app, patchesList);
-  let selected = latest;
-  let selectedUrl = apkpureDownloadUrl(app);
-
-  if (desiredVersion && latest.version && compareVersions(latest.version, desiredVersion) !== 0) {
-    if (!app.apkpureVersionCode) {
-      throw new Error(
-        `${app.label} APKPure latest is ${latest.version}, but Morphe recommends ${desiredVersion}. ` +
-        `Set ${envNameFor(app.id)}_URL to a direct compatible APK URL or set ${envNameFor(app.id)}PURE_VERSION_CODE to APKPure's version code for ${desiredVersion}.`,
-      );
-    }
-
-    selectedUrl = apkpureDownloadUrl(app, app.apkpureVersionCode);
-    selected = await inspectApkpureDownload(app, selectedUrl);
-
-    if (selected.version && compareVersions(selected.version, desiredVersion) !== 0) {
-      throw new Error(
-        `${envNameFor(app.id)}PURE_VERSION_CODE resolved to ${selected.version}, expected ${desiredVersion}.`,
-      );
-    }
-  }
 
   const metadataFile = fromRoot(".cache/apkpure", `${app.id}.json`);
   const existing = await readJson(metadataFile);
+
+  if (desiredVersion) {
+    return downloadWithApkeep(app, { desiredVersion, force, patchesList, metadataFile, existing });
+  }
+
+  const selected = await inspectApkpureLatest(app);
+  const selectedUrl = apkpureDownloadUrl(app);
 
   if (
     !force &&
@@ -430,12 +466,85 @@ async function downloadApkpureApp(app, { force = false, patchesList = null } = {
     app: app.id,
     packageName: app.packageName,
     sourcePage: app.apkpurePage,
+    source: "apkpure-direct",
     directUrl: selectedUrl,
     destination: app.input,
     version: selected.version,
     desiredVersion,
     size: selected.size,
     filename: selected.filename,
+    downloadedAt: new Date().toISOString(),
+  });
+}
+
+async function downloadWithApkeep(app, { desiredVersion, force, patchesList, metadataFile, existing }) {
+  const list = patchesList || await fetchPatchesList();
+  const topRecommendedVersion = recommendedVersionFor(app, list);
+  const compatible = compatibleVersionsFor(app, list);
+  const available = await listApkeepVersions(app);
+  const exactRequested = Boolean(app.requestedVersion) || /^\d+(?:\.\d+)+$/.test((env("APK_VERSION_SOURCE") || "").toLowerCase());
+  const selectedVersion = exactRequested
+    ? available.includes(desiredVersion) ? desiredVersion : ""
+    : compatible.find((version) => available.includes(version));
+
+  if (!selectedVersion) {
+    throw new Error(
+      `${app.label}: no requested compatible version is available through apkeep/APKPure. ` +
+      `Compatible: ${compatible.join(", ") || "none"}. Available sample: ${available.slice(-10).join(", ") || "none"}. ` +
+      `Set ${envNameFor(app.id)}_URL to a direct compatible APK URL.`,
+    );
+  }
+
+  if (topRecommendedVersion && selectedVersion !== topRecommendedVersion) {
+    console.log(`${app.label}: Morphe top recommendation is ${topRecommendedVersion}, using newest APKPure-available compatible version ${selectedVersion}`);
+  }
+
+  if (
+    !force &&
+    existing?.source === "apkeep" &&
+    existing?.version === selectedVersion &&
+    existing?.destination &&
+    existsSync(existing.destination)
+  ) {
+    app.input = existing.destination;
+    console.log(`${app.label} ${selectedVersion} already downloaded at ${relative(app.input)}`);
+    return;
+  }
+
+  const outputDir = fromRoot(".cache/apkeep", app.id);
+  rmSync(outputDir, { recursive: true, force: true });
+  mkdirSync(outputDir, { recursive: true });
+
+  const before = listFiles(outputDir);
+  const appId = `${app.packageName}@${selectedVersion}`;
+  const apkeep = await ensureApkeep(false);
+  console.log(`Downloading ${app.label} ${selectedVersion} with apkeep`);
+  run(apkeep, ["-a", appId, "-d", "apk-pure", outputDir]);
+
+  const downloaded = [...listFiles(outputDir)].filter((file) => !before.has(file));
+  const candidate = downloaded.find((file) => [".apk", ".apkm", ".xapk", ".apks"].includes(extname(file).toLowerCase()));
+
+  if (!candidate) {
+    throw new Error(`${app.label}: apkeep finished but did not produce an APK/APKM/XAPK/APKS for ${selectedVersion}.`);
+  }
+
+  const extension = extname(candidate).toLowerCase() || ".apk";
+  const destination = replaceExtension(app.input, extension);
+  rmSync(destination, { force: true });
+  renameSync(candidate, destination);
+  app.input = destination;
+
+  await writeJson(metadataFile, {
+    app: app.id,
+    packageName: app.packageName,
+    sourcePage: app.apkpurePage,
+    source: "apkeep",
+    destination,
+    version: selectedVersion,
+    desiredVersion,
+    morpheTopRecommendedVersion: topRecommendedVersion,
+    availableCompatibleVersions: compatible.filter((version) => available.includes(version)),
+    filename: basename(destination),
     downloadedAt: new Date().toISOString(),
   });
 }
@@ -502,6 +611,21 @@ function run(commandName, args) {
   if (result.status !== 0) {
     throw new Error(`${commandName} exited with status ${result.status}`);
   }
+}
+
+function runCapture(commandName, args) {
+  const result = spawnSync(commandName, args, {
+    cwd: root,
+    env: process.env,
+    encoding: "utf8",
+  });
+
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`${commandName} exited with status ${result.status}: ${result.stderr || result.stdout}`);
+  }
+
+  return `${result.stdout || ""}${result.stderr || ""}`;
 }
 
 async function githubJson(url) {
@@ -582,13 +706,19 @@ Environment:
   APK_VERSION_SOURCE         recommended, latest, or an explicit version. Defaults to recommended.
   YOUTUBE_APK_VERSION        Explicit YouTube APK versionName override.
   YOUTUBE_MUSIC_APK_VERSION  Explicit YouTube Music APK versionName override.
-  YOUTUBE_APKPURE_VERSION_CODE
-                              APKPure version code for the requested YouTube version.
-  YOUTUBE_MUSIC_APKPURE_VERSION_CODE
-                              APKPure version code for the requested YouTube Music version.
   AUTO_UPDATE_APKS           Set to 1 to refresh existing APKPure downloads during build.
   KEYSTORE_FILE              Optional signing keystore path.
   MORPHE_EXTRA_ARGS_JSON     Optional JSON array of extra patch args.`);
+}
+
+async function listApkeepVersions(app) {
+  const apkeep = await ensureApkeep(false);
+  const outputDir = fromRoot(".cache/apkeep-list");
+  mkdirSync(outputDir, { recursive: true });
+
+  const output = runCapture(apkeep, ["-l", "-a", app.packageName, "-d", "apk-pure", outputDir]);
+  const versions = [...output.matchAll(/\b\d+(?:\.\d+)+\b/g)].map((match) => match[0]);
+  return [...new Set(versions)].sort(compareVersions);
 }
 
 function optionValues(name) {
@@ -719,6 +849,34 @@ function compareVersions(a, b) {
 
 function apkpureDownloadUrl(app, version = "latest") {
   return `https://d.apkpure.net/b/APK/${encodeURIComponent(app.packageName)}?version=${encodeURIComponent(version)}`;
+}
+
+function apkeepAssetName() {
+  if (process.platform === "win32" && process.arch === "x64") return "apkeep-x86_64-pc-windows-msvc.exe";
+  if (process.platform === "linux" && process.arch === "x64") return "apkeep-x86_64-unknown-linux-gnu";
+  if (process.platform === "linux" && process.arch === "arm64") return "apkeep-aarch64-unknown-linux-gnu";
+
+  throw new Error(`Unsupported platform for automatic apkeep download: ${process.platform}/${process.arch}`);
+}
+
+function listFiles(dir) {
+  const files = new Set();
+  const visit = (current) => {
+    for (const entry of readdirSync(current)) {
+      const file = join(current, entry);
+      if (statSync(file).isDirectory()) {
+        visit(file);
+      } else {
+        files.add(file);
+      }
+    }
+  };
+  visit(dir);
+  return files;
+}
+
+function replaceExtension(file, extension) {
+  return file.slice(0, file.length - extname(file).length) + extension;
 }
 
 function apkpureHeaders() {

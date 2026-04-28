@@ -94,8 +94,6 @@ jobs:
           APK_VERSION_SOURCE: ${{ inputs.apk_version_source }}
           YOUTUBE_APK_URL: ${{ secrets.YOUTUBE_APK_URL }}
           YOUTUBE_MUSIC_APK_URL: ${{ secrets.YOUTUBE_MUSIC_APK_URL }}
-          YOUTUBE_APKPURE_VERSION_CODE: ${{ secrets.YOUTUBE_APKPURE_VERSION_CODE }}
-          YOUTUBE_MUSIC_APKPURE_VERSION_CODE: ${{ secrets.YOUTUBE_MUSIC_APKPURE_VERSION_CODE }}
           KEYSTORE_PASSWORD: ${{ secrets.APK_KEYSTORE_PASSWORD }}
           KEYSTORE_ALIAS: ${{ secrets.APK_KEYSTORE_ALIAS }}
           KEYSTORE_ENTRY_PASSWORD: ${{ secrets.APK_KEYSTORE_ENTRY_PASSWORD }}

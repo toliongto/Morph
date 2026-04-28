@@ -8,6 +8,7 @@ This repository does not store, download, or redistribute Google APKs. You provi
 
 - [Morphe CLI](https://github.com/MorpheApp/morphe-cli), the command-line patching tool.
 - [Morphe patches](https://github.com/MorpheApp/morphe-patches), the `.mpp` patch bundle source.
+- [EFF apkeep](https://github.com/EFForg/apkeep), used to download APKPure historical versions by package/version.
 - The latest stable releases discovered while scaffolding this repo on 2026-04-28 were `morphe-cli` `v1.7.0` and `morphe-patches` `v1.24.0`.
 
 Current package versions listed by the upstream patch metadata:
@@ -29,26 +30,26 @@ Requirements:
 - Java 17+
 - Internet access, or original APKs you are legally allowed to patch
 
-By default, the build script uses the latest APK versions recommended by the selected Morphe patch release. Those recommended versions come from Morphe's `patches-list.json`.
+By default, the build script uses APK versions recommended by the selected Morphe patch release. Those recommended versions come from Morphe's `patches-list.json`.
 
 ```bash
 node scripts/morphe.mjs download
 node scripts/morphe.mjs build
 ```
 
-The downloader uses APKPure's public download host for:
+The downloader uses [EFF apkeep](https://github.com/EFForg/apkeep) with APKPure for historical version downloads:
 
 - [YouTube](https://apkpure.com/youtube-2025/com.google.android.youtube)
 - [YouTube Music](https://apkpure.com/youtube-music/com.google.android.apps.youtube.music)
 
 The YouTube Music URL is normalized to `com.google.android.apps.youtube.music`, which is the package used by the current YouTube Music app and Morphe's patch metadata.
 
-APKPure's public latest download is straightforward, but historical downloads use APKPure's own version-code identifier rather than only the visible app version. If APKPure latest does not match Morphe's recommended version, provide either a direct compatible APK URL or an APKPure version code:
+The script asks apkeep for APKPure's available versions and chooses the newest version that is also compatible with the selected Morphe patch release. If APKPure does not have Morphe's top recommendation, the script uses the newest APKPure-available compatible version and records both values in the release summary.
+
+If no compatible APKPure version is available, provide a direct compatible APK URL:
 
 - `YOUTUBE_APK_URL`
 - `YOUTUBE_MUSIC_APK_URL`
-- `YOUTUBE_APKPURE_VERSION_CODE`
-- `YOUTUBE_MUSIC_APKPURE_VERSION_CODE`
 
 To deliberately use APKPure latest instead of Morphe's recommended version:
 
@@ -132,8 +133,6 @@ You can still override APKPure with private APK URLs. Add these repository secre
 
 - `YOUTUBE_APK_URL`: optional private direct URL to your original YouTube APK.
 - `YOUTUBE_MUSIC_APK_URL`: optional private direct URL to your original YouTube Music APK.
-- `YOUTUBE_APKPURE_VERSION_CODE`: optional APKPure version code for Morphe's recommended YouTube version.
-- `YOUTUBE_MUSIC_APKPURE_VERSION_CODE`: optional APKPure version code for Morphe's recommended YouTube Music version.
 
 Optional signing secrets:
 
