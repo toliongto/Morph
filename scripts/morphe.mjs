@@ -482,21 +482,17 @@ async function downloadWithApkeep(app, { desiredVersion, force, patchesList, met
   const topRecommendedVersion = recommendedVersionFor(app, list);
   const compatible = compatibleVersionsFor(app, list);
   const available = await listApkeepVersions(app);
-  const exactRequested = Boolean(app.requestedVersion) || /^\d+(?:\.\d+)+$/.test((env("APK_VERSION_SOURCE") || "").toLowerCase());
-  const selectedVersion = exactRequested
-    ? available.includes(desiredVersion) ? desiredVersion : ""
-    : compatible.find((version) => available.includes(version));
+  const availableCompatible = compatible.filter((version) => available.includes(version));
+  const selectedVersion = available.includes(desiredVersion) ? desiredVersion : "";
 
   if (!selectedVersion) {
     throw new Error(
-      `${app.label}: no requested compatible version is available through apkeep/APKPure. ` +
-      `Compatible: ${compatible.join(", ") || "none"}. Available sample: ${available.slice(-10).join(", ") || "none"}. ` +
-      `Set ${envNameFor(app.id)}_URL to a direct compatible APK URL.`,
+      `${app.label}: exact requested APK version ${desiredVersion} is not available through apkeep/APKPure. ` +
+      `Morphe top recommended version: ${topRecommendedVersion || "unknown"}. ` +
+      `Morphe compatible versions: ${compatible.join(", ") || "none"}. ` +
+      `APKPure-compatible recommended versions found: ${availableCompatible.join(", ") || "none"}. ` +
+      `Set ${envNameFor(app.id)}_URL to a direct APK URL for exactly ${desiredVersion}, or deliberately set APK_VERSION_SOURCE=latest.`,
     );
-  }
-
-  if (topRecommendedVersion && selectedVersion !== topRecommendedVersion) {
-    console.log(`${app.label}: Morphe top recommendation is ${topRecommendedVersion}, using newest APKPure-available compatible version ${selectedVersion}`);
   }
 
   if (
@@ -543,7 +539,7 @@ async function downloadWithApkeep(app, { desiredVersion, force, patchesList, met
     version: selectedVersion,
     desiredVersion,
     morpheTopRecommendedVersion: topRecommendedVersion,
-    availableCompatibleVersions: compatible.filter((version) => available.includes(version)),
+    availableCompatibleVersions: availableCompatible,
     filename: basename(destination),
     downloadedAt: new Date().toISOString(),
   });

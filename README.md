@@ -44,9 +44,9 @@ The downloader uses [EFF apkeep](https://github.com/EFForg/apkeep) with APKPure 
 
 The YouTube Music URL is normalized to `com.google.android.apps.youtube.music`, which is the package used by the current YouTube Music app and Morphe's patch metadata.
 
-The script asks apkeep for APKPure's available versions and chooses the newest version that is also compatible with the selected Morphe patch release. If APKPure does not have Morphe's top recommendation, the script uses the newest APKPure-available compatible version and records both values in the release summary.
+The script asks apkeep for APKPure's available versions and downloads the exact top recommended version from the selected Morphe patch release. It does not fall back to a nearby compatible version.
 
-If no compatible APKPure version is available, provide a direct compatible APK URL:
+If that exact APKPure version is not available through apkeep, the build fails clearly instead of substituting another version. Provide a direct URL for the exact APK version:
 
 - `YOUTUBE_APK_URL`
 - `YOUTUBE_MUSIC_APK_URL`
@@ -143,7 +143,7 @@ Optional signing secrets:
 
 Then run **Actions -> Build patched APKs -> Run workflow**.
 
-The workflow defaults `apk_version_source` to `recommended`, so each run uses the highest compatible YouTube and YouTube Music versions declared by the selected Morphe patch release.
+The workflow defaults `apk_version_source` to `recommended`, so each run requires the exact highest compatible YouTube and YouTube Music versions declared by the selected Morphe patch release.
 
 By default, manual workflow runs now pass these Morphe CLI patch flags:
 
@@ -187,7 +187,9 @@ After the build workflow creates the Release, it stores the handled Morphe patch
 
 ## Compatibility Note
 
-Morphe patches only support the versions listed by the patch bundle. On 2026-04-28 APKPure latest was newer than Morphe's listed compatible versions. If patching fails due to version compatibility, provide a compatible APK manually or pass Morphe's `--force` after `--`:
+Morphe patches only support the versions listed by the patch bundle. On 2026-04-28 APKPure latest was newer than Morphe's listed compatible versions, and APKPure's apkeep-visible archive did not expose every current Morphe top recommendation. If an exact recommended APK is unavailable through apkeep/APKPure, provide a direct URL for that exact APK version or switch `APK_VERSION_SOURCE=latest` deliberately.
+
+If patching fails due to version compatibility after you intentionally use a different APK version, provide a compatible APK manually or pass Morphe's `--force` after `--`:
 
 ```bash
 node scripts/morphe.mjs build -- --force

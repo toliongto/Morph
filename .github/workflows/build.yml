@@ -130,7 +130,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PATCHES_VERSION: ${{ inputs.patches_version }}
-        run: gh variable set LAST_MORPHE_PATCHES_RELEASE --body "$PATCHES_VERSION"
+        run: gh variable set LAST_MORPHE_PATCHES_RELEASE --repo "$GITHUB_REPOSITORY" --body "$PATCHES_VERSION"
 
       - name: Upload patched APKs
         if: ${{ inputs.upload_artifact }}
