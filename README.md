@@ -80,13 +80,6 @@ Then build with local APKs:
 APK_SOURCE=local node scripts/morphe.mjs build
 ```
 
-The default patched package names are:
-
-```text
-com.mistu.android.youtube
-com.mistu.android.youtube.music
-```
-
 ## Patch Options
 
 Generate editable options files:
