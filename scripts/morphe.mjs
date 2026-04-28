@@ -483,17 +483,8 @@ async function downloadWithApkeep(app, { desiredVersion, force, patchesList, met
   const compatible = compatibleVersionsFor(app, list);
   const available = await listApkeepVersions(app);
   const availableCompatible = compatible.filter((version) => available.includes(version));
-  const selectedVersion = available.includes(desiredVersion) ? desiredVersion : "";
-
-  if (!selectedVersion) {
-    throw new Error(
-      `${app.label}: exact requested APK version ${desiredVersion} is not available through apkeep/APKPure. ` +
-      `Morphe top recommended version: ${topRecommendedVersion || "unknown"}. ` +
-      `Morphe compatible versions: ${compatible.join(", ") || "none"}. ` +
-      `APKPure-compatible recommended versions found: ${availableCompatible.join(", ") || "none"}. ` +
-      `Set ${envNameFor(app.id)}_URL to a direct APK URL for exactly ${desiredVersion}, or deliberately set APK_VERSION_SOURCE=latest.`,
-    );
-  }
+  const selectedVersion = desiredVersion;
+  const exactPageUrl = apkpureVersionPageUrl(app, selectedVersion);
 
   if (
     !force &&
@@ -514,14 +505,21 @@ async function downloadWithApkeep(app, { desiredVersion, force, patchesList, met
   const before = listFiles(outputDir);
   const appId = `${app.packageName}@${selectedVersion}`;
   const apkeep = await ensureApkeep(false);
-  console.log(`Downloading ${app.label} ${selectedVersion} with apkeep`);
+  console.log(`Downloading ${app.label} ${selectedVersion} with apkeep (${exactPageUrl})`);
   run(apkeep, ["-a", appId, "-d", "apk-pure", outputDir]);
 
   const downloaded = [...listFiles(outputDir)].filter((file) => !before.has(file));
   const candidate = downloaded.find((file) => [".apk", ".apkm", ".xapk", ".apks"].includes(extname(file).toLowerCase()));
 
   if (!candidate) {
-    throw new Error(`${app.label}: apkeep finished but did not produce an APK/APKM/XAPK/APKS for ${selectedVersion}.`);
+    throw new Error(
+      `${app.label}: exact requested APK version ${selectedVersion} was not downloaded from APKPure. ` +
+      `Checked exact APKPure page: ${exactPageUrl}. ` +
+      `Morphe top recommended version: ${topRecommendedVersion || "unknown"}. ` +
+      `Morphe compatible versions: ${compatible.join(", ") || "none"}. ` +
+      `APKPure-compatible recommended versions found: ${availableCompatible.join(", ") || "none"}. ` +
+      `Set ${envNameFor(app.id)}_URL to a direct APK URL for exactly ${selectedVersion}, or deliberately set APK_VERSION_SOURCE=latest.`,
+    );
   }
 
   const extension = extname(candidate).toLowerCase() || ".apk";
@@ -538,6 +536,7 @@ async function downloadWithApkeep(app, { desiredVersion, force, patchesList, met
     destination,
     version: selectedVersion,
     desiredVersion,
+    exactPageUrl,
     morpheTopRecommendedVersion: topRecommendedVersion,
     availableCompatibleVersions: availableCompatible,
     filename: basename(destination),
@@ -845,6 +844,10 @@ function compareVersions(a, b) {
 
 function apkpureDownloadUrl(app, version = "latest") {
   return `https://d.apkpure.net/b/APK/${encodeURIComponent(app.packageName)}?version=${encodeURIComponent(version)}`;
+}
+
+function apkpureVersionPageUrl(app, version) {
+  return `${app.apkpurePage.replace(/\/$/, "")}/download/${encodeURIComponent(version)}`;
 }
 
 function apkeepAssetName() {
