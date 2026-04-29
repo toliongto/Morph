@@ -32,7 +32,7 @@ jobs:
           gh workflow run build.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "${GITHUB_REF_NAME}" \
-            -f targets="youtube,youtube-music" \
+            -f targets="youtube,youtube-music,reddit" \
             -f cli_version="latest" \
             -f patches_version="${latest}" \
             -f apk_version_source="recommended" \

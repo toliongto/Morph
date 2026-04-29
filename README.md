@@ -1,6 +1,6 @@
-# Morph YouTube Builder
+# Morph App Builder
 
-Automation for building Morphe-patched YouTube and YouTube Music APKs.
+Automation for building Morphe-patched YouTube, YouTube Music, and Reddit APKs.
 
 The builder downloads the selected Morphe CLI and patch bundle, gets source APKs, applies Morphe patches, and signs with a configured private keystore when one is available.
 
@@ -29,7 +29,7 @@ Install Python dependencies:
 python -m pip install -r requirements.txt
 ```
 
-Build both targets:
+Build all targets:
 
 ```bash
 node scripts/morphe.mjs build
@@ -53,6 +53,7 @@ Outputs are written to:
 ```text
 output/youtube-patched.apk
 output/youtube-music-patched.apk
+output/reddit-patched.apk
 ```
 
 ## APK Selection
@@ -72,7 +73,10 @@ You can provide your own source APK files instead:
 ```text
 input/youtube.apk
 input/youtube-music.apk
+input/reddit.apk
 ```
+
+For Reddit bundle inputs, set `REDDIT_APK=input/reddit.apkm`.
 
 Then build with local APKs:
 
@@ -93,6 +97,7 @@ That creates:
 ```text
 config/youtube-options.json
 config/youtube-music-options.json
+config/reddit-options.json
 ```
 
 After editing those JSON files, `node scripts/morphe.mjs build` passes them to Morphe CLI automatically.

@@ -70,6 +70,27 @@ const appConfigs = {
     options: envPath("YOUTUBE_MUSIC_OPTIONS", "config/youtube-music-options.json"),
     result: envPath("YOUTUBE_MUSIC_RESULT", "output/youtube-music-result.json"),
   },
+  reddit: {
+    id: "reddit",
+    label: "Reddit",
+    apkpureName: "Reddit",
+    packageName: "com.reddit.frontpage",
+    apkpureSlug: "reddit-app",
+    apkpurePage: "https://apkpure.com/reddit-app/com.reddit.frontpage",
+    apkmirrorOrg: "redditinc",
+    apkmirrorRepo: "reddit",
+    apkmirrorType: env("REDDIT_APKMIRROR_TYPE") || "bundle",
+    apkmirrorArch: env("REDDIT_APKMIRROR_ARCH") || env("APKMIRROR_ARCH") || "universal",
+    apkmirrorFallbackArch: env("REDDIT_APKMIRROR_FALLBACK_ARCH") || env("APKMIRROR_FALLBACK_ARCH") || "arm64-v8a",
+    apkmirrorDpi: env("REDDIT_APKMIRROR_DPI") || env("APKMIRROR_DPI") || "120-640dpi",
+    patchedPackageName: env("REDDIT_PATCHED_PACKAGE_NAME"),
+    requestedVersion: env("REDDIT_APK_VERSION"),
+    input: envPath("REDDIT_APK", "input/reddit.apk"),
+    url: env("REDDIT_APK_URL"),
+    output: envPath("REDDIT_OUT", "output/reddit-patched.apk"),
+    options: envPath("REDDIT_OPTIONS", "config/reddit-options.json"),
+    result: envPath("REDDIT_RESULT", "output/reddit-result.json"),
+  },
 };
 
 const releaseAssets = {
@@ -296,21 +317,24 @@ async function selectedPatchReleaseTag() {
 }
 
 async function printVersions() {
-  const [cliRelease, patchesRelease, patchesList, youtubeLatest, musicLatest] = await Promise.all([
+  const [cliRelease, patchesRelease, patchesList] = await Promise.all([
     githubJson("https://api.github.com/repos/MorpheApp/morphe-cli/releases/latest"),
     githubJson("https://api.github.com/repos/MorpheApp/morphe-patches/releases/latest"),
     fetchPatchesList(),
-    inspectApkpureLatest(appConfigs.youtube),
-    inspectApkpureLatest(appConfigs["youtube-music"]),
   ]);
 
   console.log(`Morphe CLI latest: ${cliRelease.tag_name}`);
   console.log(`Morphe patches latest: ${patchesRelease.tag_name}`);
   console.log(`Patch list version: ${patchesList.version}`);
-  console.log(`APKPure latest YouTube: ${youtubeLatest.version || "unknown"} (${youtubeLatest.size || "unknown size"})`);
-  console.log(`APKPure latest YouTube Music: ${musicLatest.version || "unknown"} (${musicLatest.size || "unknown size"})`);
-  console.log(`Recommended YouTube: ${recommendedVersionFor(appConfigs.youtube, patchesList) || "unknown"}`);
-  console.log(`Recommended YouTube Music: ${recommendedVersionFor(appConfigs["youtube-music"], patchesList) || "unknown"}`);
+
+  for (const app of Object.values(appConfigs)) {
+    const latest = await inspectApkpureLatest(app).catch((error) => ({ error: error.message }));
+    const latestLabel = latest.error
+      ? `unknown (${latest.error})`
+      : `${latest.version || "unknown"} (${latest.size || "unknown size"})`;
+    console.log(`APKPure latest ${app.label}: ${latestLabel}`);
+    console.log(`Recommended ${app.label}: ${recommendedVersionFor(app, patchesList) || "unknown"}`);
+  }
 
   const packages = new Map();
   for (const patch of patchesList.patches) {
@@ -422,7 +446,7 @@ function selectedApps() {
   const explicitTargets = optionValues("target").concat(optionValues("targets"));
   const targets = (explicitTargets.length
     ? explicitTargets
-    : splitTargets(env("BUILD_TARGETS") || "youtube,youtube-music"))
+    : splitTargets(env("BUILD_TARGETS") || "youtube,youtube-music,reddit"))
     .filter(Boolean);
 
   const uniqueTargets = [...new Set(targets)];
@@ -503,7 +527,7 @@ async function applyCachedInputMetadata(app) {
 function patchArgsFor(app) {
   const args = [...passthroughArgs];
   if (app.forcePatch && !args.includes("--force")) {
-    console.log(`${app.label}: adding --force because APKPure latest fallback is being used.`);
+    console.log(`${app.label}: adding --force because latest APK fallback is being used.`);
     args.push("--force");
   }
   return args;
@@ -796,7 +820,10 @@ async function downloadWithPythonApkmirror(
   rmSync(outputDir, { recursive: true, force: true });
   mkdirSync(outputDir, { recursive: true });
 
-  console.log(`Downloading APKMirror ${app.label} ${requestedLabel} (${app.apkmirrorArch}/${app.apkmirrorDpi})`);
+  const apkmirrorType = app.apkmirrorType || "apk";
+  const apkmirrorExtension = apkmirrorType === "bundle" ? "apkm" : "apk";
+
+  console.log(`Downloading APKMirror ${app.label} ${requestedLabel} (${apkmirrorType}, ${app.apkmirrorArch}/${app.apkmirrorDpi})`);
   const metadata = runPythonJson([
     fromRoot("scripts/apkmirror_download.py"),
     "--app-name",
@@ -816,9 +843,9 @@ async function downloadWithPythonApkmirror(
     "--dpi",
     app.apkmirrorDpi,
     "--type",
-    "apk",
+    apkmirrorType,
     "--out-file",
-    `${app.id}-${requestedLabel}.apk`,
+    `${app.id}-${requestedLabel}.${apkmirrorExtension}`,
     ...(app.apkmirrorFallbackArch ? ["--fallback-arch", app.apkmirrorFallbackArch] : []),
   ]);
 
@@ -1225,36 +1252,44 @@ function clean() {
 
 function printHelp() {
   console.log(`Usage:
-  node scripts/morphe.mjs build [--target youtube] [--target youtube-music] [-- <morphe-cli patch args>]
-  node scripts/morphe.mjs download [--target youtube] [--force-download]
-  node scripts/morphe.mjs options [--target youtube]
+  node scripts/morphe.mjs build [--target youtube] [--target youtube-music] [--target reddit] [-- <morphe-cli patch args>]
+  node scripts/morphe.mjs download [--target youtube] [--target youtube-music] [--target reddit] [--force-download]
+  node scripts/morphe.mjs options [--target youtube] [--target youtube-music] [--target reddit]
   node scripts/morphe.mjs tools [--refresh-tools]
   node scripts/morphe.mjs versions
   node scripts/morphe.mjs release-notes
   node scripts/morphe.mjs clean
 
 Environment:
-  BUILD_TARGETS              Comma-separated targets. Defaults to youtube,youtube-music.
+  BUILD_TARGETS              Comma-separated targets. Defaults to youtube,youtube-music,reddit.
   MORPHE_CLI_VERSION         Release tag such as v1.7.0, or latest.
   MORPHE_PATCHES_VERSION     Release tag such as v1.24.0, or latest.
   YOUTUBE_APK                Local input path for YouTube.
   YOUTUBE_MUSIC_APK          Local input path for YouTube Music.
+  REDDIT_APK                 Local input path for Reddit.
   YOUTUBE_APK_URL            Private direct URL for CI input.
   YOUTUBE_MUSIC_APK_URL      Private direct URL for CI input.
+  REDDIT_APK_URL             Private direct URL for CI input.
   APK_SOURCE                 Comma-separated source order: apkmirror, apkpure, local, or auto.
                               Defaults to apkpure.
   APK_VERSION_SOURCE         recommended, latest, or an explicit version. Defaults to recommended.
   YOUTUBE_APK_VERSION        Explicit YouTube APK versionName override.
   YOUTUBE_MUSIC_APK_VERSION  Explicit YouTube Music APK versionName override.
+  REDDIT_APK_VERSION         Explicit Reddit APK versionName override.
   APKMIRROR_ARCH             Optional APKMirror architecture override.
   APKMIRROR_DPI              Optional APKMirror DPI override. Defaults to nodpi.
   YOUTUBE_APKMIRROR_ARCH     YouTube APKMirror architecture. Defaults to universal.
   YOUTUBE_MUSIC_APKMIRROR_ARCH
                               YouTube Music APKMirror architecture. Defaults to arm64-v8a.
+  REDDIT_APKMIRROR_TYPE      Reddit APKMirror file type. Defaults to bundle.
+  REDDIT_APKMIRROR_ARCH      Reddit APKMirror architecture. Defaults to universal.
+  REDDIT_APKMIRROR_DPI       Reddit APKMirror DPI. Defaults to 120-640dpi.
   YOUTUBE_PATCHED_PACKAGE_NAME
                               Defaults to com.mistu.android.youtube.
   YOUTUBE_MUSIC_PATCHED_PACKAGE_NAME
                               Defaults to com.mistu.android.youtube.music.
+  REDDIT_PATCHED_PACKAGE_NAME
+                              Optional; only works if the selected patch bundle supports it.
   AUTO_UPDATE_APKS           Set to 1 to refresh existing APK downloads during build.
   PYTHON_BIN                 Python executable for the APKPure downloader. Defaults to python.
   KEYSTORE_FILE              Optional signing keystore path.
@@ -1337,7 +1372,12 @@ function relative(file) {
 }
 
 function envNameFor(id) {
-  return id === "youtube" ? "YOUTUBE_APK" : "YOUTUBE_MUSIC_APK";
+  const names = {
+    youtube: "YOUTUBE_APK",
+    "youtube-music": "YOUTUBE_MUSIC_APK",
+    reddit: "REDDIT_APK",
+  };
+  return names[id] || `${id.replaceAll("-", "_").toUpperCase()}_APK`;
 }
 
 function truthy(value) {
